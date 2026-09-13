@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/swsw1005/local-dev-launcher/internal/discovery"
 	"github.com/swsw1005/local-dev-launcher/internal/domain"
@@ -22,7 +24,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -154,11 +156,25 @@ func (a App) launchTUI(ctx context.Context, directory string) error {
 			return err
 		}
 		browser = selection.State
-		if err := a.runFromTUI(ctx, directory, selection.TaskID); err != nil {
-			browser = browser.WithNotice(fmt.Sprintf("%s stopped or failed (%v). Enter reruns it.", selection.TaskID, err))
-			continue
+		for {
+			runResult, err := a.runFromTUI(ctx, directory, selection.TaskID)
+			if err != nil {
+				return err
+			}
+			action, err := tui.ShowRunResult(a.in, a.out, runResult)
+			if err != nil {
+				return err
+			}
+			switch action {
+			case tui.ResultRerun:
+				continue
+			case tui.ResultBack:
+				break
+			default:
+				return nil
+			}
+			break
 		}
-		browser = browser.WithNotice(fmt.Sprintf("%s finished. Enter reruns it.", selection.TaskID))
 	}
 }
 
@@ -166,11 +182,48 @@ func (a App) launchTUI(ctx context.Context, directory string) error {
 // that signal to both the Gradle process and LDR's foreground process group;
 // registering it here prevents LDR itself from exiting before it can reopen
 // the selected task pane.
-func (a App) runFromTUI(ctx context.Context, directory, taskID string) error {
+func (a App) runFromTUI(ctx context.Context, directory, taskID string) (tui.RunResult, error) {
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	return a.run(ctx, directory, taskID)
+	if err := a.initialize(ctx, directory, false); err != nil {
+		return tui.RunResult{}, err
+	}
+	root, err := a.findRoot(directory)
+	if err != nil {
+		return tui.RunResult{}, fmt.Errorf("find project root: %w", err)
+	}
+	task, options, err := a.resolveRunnable(root, taskID)
+	if err != nil {
+		return tui.RunResult{}, err
+	}
+	logFile, logPath, err := newForegroundLog(state.NewLayout(root), task.ID)
+	if err != nil {
+		return tui.RunResult{}, err
+	}
+	defer logFile.Close()
+	fmt.Fprintf(logFile, "[LDR] Started %s at %s\n\n", task.ID, time.Now().Format(time.RFC3339))
+	runErr := execution.RunWithOptions(ctx, root, task, io.MultiWriter(a.out, logFile), io.MultiWriter(a.errOut, logFile), options)
+	if runErr != nil {
+		fmt.Fprintf(logFile, "\n[LDR] Stopped or failed: %v\n", runErr)
+	} else {
+		fmt.Fprintf(logFile, "\n[LDR] Finished successfully\n")
+	}
+	return tui.RunResult{Task: task, LogPath: logPath, Err: runErr}, nil
+}
+
+func newForegroundLog(layout state.Layout, taskID string) (*os.File, string, error) {
+	directory := filepath.Join(layout.State, "logs", "foreground")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return nil, "", err
+	}
+	name := strings.NewReplacer("/", "-", ":", "-", " ", "-").Replace(taskID)
+	path := filepath.Join(directory, fmt.Sprintf("%s-%d.log", name, time.Now().UnixNano()))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, "", err
+	}
+	return file, path, nil
 }
 
 func (a App) run(ctx context.Context, directory, taskID string) error {

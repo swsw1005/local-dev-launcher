@@ -143,9 +143,11 @@ to open an item and Left to go back. The current path stays visible in the
 compact breadcrumb at the top. Enter on a command runs it; `/` filters and `q`
 quits. Gradle panes place `bootRun`, `build`, `clean`, and `test` at the top
 as favorites, then organize the remaining commands using Gradle's task groups.
-After a command exits (including a server stopped with Ctrl+C), LDR returns to
-that same selected command; press Enter to run it again. `ldr tui` opens the
-same launcher explicitly.
+After a command exits (including a server stopped with Ctrl+C), LDR first opens
+a scrollable final-log screen positioned at the end of the output. Press Enter
+to run the same command again, or ← to return to the task list at the same
+location. Foreground logs remain under `.ldr/state/logs/foreground/`. `ldr tui`
+opens the same launcher explicitly.
 
 ## Profiles
 
