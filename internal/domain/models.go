@@ -10,6 +10,7 @@ type Task struct {
 	Description string   `json:"description,omitempty"`
 	Adapter     string   `json:"adapter"`
 	Module      string   `json:"module,omitempty"`
+	ModulePath  string   `json:"modulePath,omitempty"`
 	WorkingDir  string   `json:"workingDir"`
 	Command     string   `json:"command"`
 	Args        []string `json:"args"`
