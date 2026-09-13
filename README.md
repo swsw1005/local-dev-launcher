@@ -20,12 +20,36 @@ The MVP CLI core currently provides:
 - user-level runtime-store paths
 - Go runtime requirement parsing and resolution (`go.mod` / `go.work`)
 
-Static Gradle, Maven, Node, and Go task discovery is available. TUI and
-long-running process management are the next milestones.
+Gradle, Maven, Node, and Go task discovery, the Finder-style TUI, and
+long-running process management are available on macOS.
 
-## Install from source
+## Install on macOS
 
-LDR is written in Go. Build the binary into a directory already on your PATH:
+Go is not required for normal installation. Download the matching prebuilt
+binary from the [latest release](https://github.com/swsw1005/local-dev-launcher/releases/latest),
+then extract and install it:
+
+```bash
+# Apple Silicon (M1/M2/M3/M4)
+gh release download v0.1.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.1.0_darwin_arm64.tar.gz'
+tar -xzf ldr_0.1.0_darwin_arm64.tar.gz
+install -m 0755 ldr "$HOME/bin/ldr"
+```
+
+For Intel Macs, replace `darwin_arm64` with `darwin_amd64`. The repository is
+private, so `gh auth login` is required for the command above; downloading the
+release asset in GitHub's browser UI works as well.
+
+If `~/bin` is not on your PATH, add this to your shell configuration:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+```
+
+## Build from source
+
+LDR is written in Go. Only contributors who want to build it themselves need
+Go installed:
 
 ```bash
 go build -o ~/bin/ldr ./cmd/ldr
@@ -47,12 +71,6 @@ ldr profile clone gradle.homeops-agent-api.bootRun agent-api-local
 ldr profile list
 ldr --help
 ldr --version
-```
-
-If `~/bin` is not on your PATH, add this to your shell configuration:
-
-```bash
-export PATH="$HOME/bin:$PATH"
 ```
 
 ## Project-local state
