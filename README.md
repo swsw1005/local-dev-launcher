@@ -10,16 +10,18 @@ Discover → Resolve → Run → Manage
 
 ## Status
 
-The project is in its first implementation milestone. It currently provides:
+The MVP CLI core currently provides:
 
 - `ldr init` to create isolated project-local state
 - Git ignore detection and a clear warning for unignored `.ldr/` directories
-- shared domain models for future discovery, profiles, and execution
+- normalized task registry and SHA-256 discovery cache
+- direct structured task execution with streamed output and exit-code propagation
+- user profiles with environment and argument overrides
 - user-level runtime-store paths
 - Go runtime requirement parsing and resolution (`go.mod` / `go.work`)
 
-Gradle, Maven, Node task discovery, task execution, profiles, TUI, and process
-management are planned but are not available yet.
+Static Gradle, Maven, Node, and Go task discovery is available. TUI and
+long-running process management are the next milestones.
 
 ## Install from source
 
@@ -34,6 +36,17 @@ Then run it from any project directory:
 ```bash
 ldr
 ldr init
+ldr list
+ldr list --json
+ldr refresh
+ldr run gradle.homeops-agent-api.bootRun
+ldr start gradle.homeops-agent-api.bootRun
+ldr ps
+ldr tui
+ldr profile clone gradle.homeops-agent-api.bootRun agent-api-local
+ldr profile list
+ldr --help
+ldr --version
 ```
 
 If `~/bin` is not on your PATH, add this to your shell configuration:
@@ -44,7 +57,10 @@ export PATH="$HOME/bin:$PATH"
 
 ## Project-local state
 
-`ldr init` creates only local state in the detected project root:
+On first use in a project, `ldr` (or `ldr init`) creates local state in the
+detected project root without blocking. `ldr init --yes` remains accepted for
+script compatibility. `ldr init` creates only local state in the detected
+project root:
 
 ```text
 .ldr/
@@ -53,12 +69,74 @@ export PATH="$HOME/bin:$PATH"
 └── state/      # ephemeral process state
 ```
 
-LDR never silently changes `.gitignore`. In a Git worktree it warns when
-`.ldr/` is not ignored; add the following entry yourself:
+LDR never silently changes `.gitignore`. In a Git worktree it emits an
+English/Korean warning when `.ldr/` is not ignored, then continues; add the
+following entry yourself:
 
 ```gitignore
 .ldr/
 ```
+
+## Discover tasks
+
+```bash
+ldr list
+ldr list --json
+ldr refresh
+```
+
+LDR statically discovers common Gradle (`clean`, `build`, `test`, Spring Boot
+`bootRun`), Maven lifecycle, package.json script, and Go build/test tasks. It
+stores a SHA-256 manifest and normalized task registry under `.ldr/cache/`;
+unchanged projects reuse that cache, while `ldr refresh` rebuilds it.
+
+Run any discovered task by its ID:
+
+```bash
+ldr run gradle.homeops-agent-api.bootRun
+```
+
+LDR executes the task directly without a shell and streams its output. It
+resolves Node and Go commands to an absolute executable in the current user's
+runtime store, rather than depending on the shell's PATH. Node uses
+`package.json` `engines.node` when declared (otherwise Node 24 is the default);
+Java uses the project's declared major where recognized and otherwise Java 21.
+
+For long-running tasks, use the process manager:
+
+```bash
+ldr start gradle.homeops-agent-api.bootRun
+ldr ps
+ldr logs <process-id>
+ldr stop <process-id>
+```
+
+LDR writes process metadata and logs only under `.ldr/state/`.
+
+## Interactive launcher
+
+Running `ldr` with no command opens an interactive task launcher in a terminal.
+Tasks are organized as `folder → module → adapter → command`: for example,
+`project root → homeops-agent-api → GRADLE → bootRun`. It opens like Finder:
+the first pane lists project modules plus root-level tools; use Right or Enter
+to open an item and Left to go back. The current path stays visible in the
+compact breadcrumb at the top. Enter on a command runs it; `/` filters and `q`
+quits. `ldr tui` opens the same launcher explicitly.
+
+## Profiles
+
+Clone a discovered task into a user-managed profile:
+
+```bash
+ldr profile clone gradle.homeops-agent-api.bootRun agent-api-local
+ldr profile show agent-api-local
+ldr run agent-api-local
+```
+
+Profiles live in `.ldr/profiles/`, survive discovery refreshes, and extend the
+base task rather than duplicating its command. The initial TOML format supports
+`[env]` overrides plus `[args]` `prepend` and `append` arrays. A profile whose
+base task disappears remains on disk and is shown as `BROKEN`.
 
 ## Runtime store
 

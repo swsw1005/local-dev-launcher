@@ -3,12 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/swim/local-dev-runner/internal/gitignore"
+	"github.com/swsw1005/local-dev-launcher/internal/gitignore"
 )
 
 type stubGit struct{ status gitignore.Status }
@@ -25,7 +26,7 @@ func TestInitCreatesLayoutAndWarnsForUnignoredGitState(t *testing.T) {
 	var out, errOut bytes.Buffer
 	app := App{out: &out, errOut: &errOut, git: stubGit{status: gitignore.Status{InRepository: true}}, findRoot: func(string) (string, error) { return root, nil }}
 
-	if err := app.Run(context.Background(), []string{"init"}, root); err != nil {
+	if err := app.Run(context.Background(), []string{"init", "--yes"}, root); err != nil {
 		t.Fatal(err)
 	}
 	for _, relative := range []string{".ldr/cache", ".ldr/profiles", ".ldr/state"} {
@@ -33,19 +34,110 @@ func TestInitCreatesLayoutAndWarnsForUnignoredGitState(t *testing.T) {
 			t.Fatalf("missing %s: %v", relative, err)
 		}
 	}
-	if !strings.Contains(errOut.String(), "WARNING: .ldr/ is not ignored") {
+	if !strings.Contains(errOut.String(), "WARNING: .ldr/ is not ignored") || !strings.Contains(errOut.String(), "경고: .ldr/ 디렉터리가 Git에서 무시되지 않습니다") {
 		t.Fatalf("warning = %q", errOut.String())
 	}
 }
 
-func TestNoArgumentsDoesNotInitialize(t *testing.T) {
+func TestNoArgumentsInitializesWithoutBlocking(t *testing.T) {
 	root := t.TempDir()
 	var out, errOut bytes.Buffer
-	app := New(&out, &errOut)
+	app := New(strings.NewReader(""), &out, &errOut)
 	if err := app.Run(context.Background(), nil, root); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".ldr")); !os.IsNotExist(err) {
-		t.Fatalf(".ldr should not exist, stat error = %v", err)
+	if info, err := os.Stat(filepath.Join(root, ".ldr", "cache")); err != nil || !info.IsDir() {
+		t.Fatalf(".ldr/cache missing: %v", err)
+	}
+}
+
+func TestExistingStateDoesNotPrintAStatusLine(t *testing.T) {
+	root := t.TempDir()
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }}
+
+	if err := app.Run(context.Background(), nil, root); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), nil, root); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("output = %q, want no state status", out.String())
+	}
+}
+
+func TestHelpAndVersion(t *testing.T) {
+	var out, errOut bytes.Buffer
+	app := New(strings.NewReader(""), &out, &errOut)
+	if err := app.Run(context.Background(), []string{"--help"}, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Usage:") {
+		t.Fatalf("help = %q", out.String())
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"-v"}, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "ldr "+Version+"\n"; got != want {
+		t.Fatalf("version = %q, want %q", got, want)
+	}
+}
+
+func TestListOutputsDiscoveredTasksAsJSON(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"list", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	var tasks []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &tasks); err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "node.root.dev" {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+}
+
+func TestRunReportsMissingTask(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	err := app.Run(context.Background(), []string{"run", "node.root.missing"}, root)
+	if err == nil || !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestProfileCloneAndList(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"profile", "clone", "node.root.dev", "frontend-local"}, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Created profile") {
+		t.Fatalf("output = %q", out.String())
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"profile", "list"}, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "frontend-local\tnode.root.dev\tREADY") {
+		t.Fatalf("output = %q", out.String())
 	}
 }
