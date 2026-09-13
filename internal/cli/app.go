@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 
 	"github.com/swsw1005/local-dev-launcher/internal/discovery"
@@ -21,7 +22,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.1.0-dev"
+const Version = "0.1.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -146,11 +147,30 @@ func (a App) launchTUI(ctx context.Context, directory string) error {
 		fmt.Fprintln(a.out, "No runnable tasks discovered.")
 		return nil
 	}
-	selected, err := tui.Select(a.in, a.out, result.Tasks)
-	if err != nil || selected == "" {
-		return err
+	browser := tui.State{}
+	for {
+		selection, err := tui.SelectWithState(a.in, a.out, result.Tasks, browser)
+		if err != nil || selection.TaskID == "" {
+			return err
+		}
+		browser = selection.State
+		if err := a.runFromTUI(ctx, directory, selection.TaskID); err != nil {
+			browser = browser.WithNotice(fmt.Sprintf("%s stopped or failed (%v). Enter reruns it.", selection.TaskID, err))
+			continue
+		}
+		browser = browser.WithNotice(fmt.Sprintf("%s finished. Enter reruns it.", selection.TaskID))
 	}
-	return a.run(ctx, directory, selected)
+}
+
+// runFromTUI keeps Ctrl+C scoped to the foreground child task. Terminals send
+// that signal to both the Gradle process and LDR's foreground process group;
+// registering it here prevents LDR itself from exiting before it can reopen
+// the selected task pane.
+func (a App) runFromTUI(ctx context.Context, directory, taskID string) error {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	return a.run(ctx, directory, taskID)
 }
 
 func (a App) run(ctx context.Context, directory, taskID string) error {

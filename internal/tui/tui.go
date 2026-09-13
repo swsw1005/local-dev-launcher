@@ -20,6 +20,7 @@ type entryKind int
 const (
 	moduleEntry entryKind = iota
 	adapterEntry
+	groupEntry
 	taskEntry
 )
 
@@ -29,6 +30,7 @@ type browserEntry struct {
 	kind                   entryKind
 	modulePath             string
 	adapter                string
+	group                  string
 	task                   *domain.Task
 }
 
@@ -50,7 +52,29 @@ func (browserEntry) Description() string { return "" }
 type location struct {
 	modulePath string
 	adapter    string
+	group      string
 	selectedID string
+}
+
+// State preserves the current Finder-style location between task executions.
+// Its fields stay private so navigation representation can evolve freely.
+type State struct {
+	locations []location
+	notice    string
+}
+
+// WithNotice displays the result of the previously run task after the TUI
+// returns to the same selected command.
+func (s State) WithNotice(notice string) State {
+	s.notice = notice
+	return s
+}
+
+// Selection is the command chosen in a pane together with the pane state to
+// restore once that command exits.
+type Selection struct {
+	TaskID string
+	State  State
 }
 
 type model struct {
@@ -58,10 +82,19 @@ type model struct {
 	tasks    []domain.Task
 	stack    []location
 	selected string
+	notice   string
 }
 
 func newModel(tasks []domain.Task) model {
-	m := model{tasks: tasks, stack: []location{{modulePath: "."}}}
+	return newModelWithState(tasks, State{})
+}
+
+func newModelWithState(tasks []domain.Task, state State) model {
+	stack := append([]location(nil), state.locations...)
+	if len(stack) == 0 {
+		stack = []location{{modulePath: "."}}
+	}
+	m := model{tasks: tasks, stack: stack, notice: state.notice}
 	m.list = newList(m.entries())
 	m.updateTitle()
 	return m
@@ -85,6 +118,10 @@ func newList(items []list.Item) list.Model {
 
 func (m model) current() location { return m.stack[len(m.stack)-1] }
 
+func (m model) state() State {
+	return State{locations: append([]location(nil), m.stack...)}
+}
+
 func (m *model) refreshList() {
 	items := m.entries()
 	_ = m.list.SetItems(items)
@@ -107,6 +144,10 @@ func (m *model) updateTitle() {
 func (m model) breadcrumb() string {
 	parts := []string{"project root"}
 	for _, item := range m.stack[1:] {
+		if item.group != "" {
+			parts = append(parts, item.group)
+			continue
+		}
 		if item.adapter != "" {
 			parts = append(parts, strings.ToUpper(item.adapter))
 			continue
@@ -119,7 +160,14 @@ func (m model) breadcrumb() string {
 func (m model) entries() []list.Item {
 	current := m.current()
 	if current.adapter != "" {
-		return taskEntries(m.tasksAt(current.modulePath, current.adapter))
+		localTasks := m.tasksAt(current.modulePath, current.adapter)
+		if current.group != "" {
+			return taskEntries(tasksInGroup(localTasks, current.group))
+		}
+		if current.adapter == "gradle" {
+			return gradleEntries(localTasks)
+		}
+		return taskEntries(localTasks)
 	}
 
 	children := map[string]string{}
@@ -160,6 +208,8 @@ func (m model) entries() []list.Item {
 				adapter:     adapter,
 			})
 		}
+	} else if len(localTasks) > 0 && localTasks[0].Adapter == "gradle" {
+		entries = append(entries, gradleEntries(localTasks)...)
 	} else {
 		entries = append(entries, taskEntries(localTasks)...)
 	}
@@ -190,6 +240,66 @@ func taskEntries(tasks []domain.Task) []list.Item {
 		items = append(items, browserEntry{id: "task:" + task.ID, kind: taskEntry, label: task.Name, description: commandDescription(task), task: &task})
 	}
 	return items
+}
+
+func gradleEntries(tasks []domain.Task) []list.Item {
+	items := make([]list.Item, 0, len(tasks))
+	favorites := make([]domain.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if !task.Favorite {
+			continue
+		}
+		favorites = append(favorites, task)
+	}
+	sort.SliceStable(favorites, func(i, j int) bool { return favoriteOrder(favorites[i]) < favoriteOrder(favorites[j]) })
+	for _, favorite := range favorites {
+		items = append(items, browserEntry{id: "task:" + favorite.ID, kind: taskEntry, label: "★ " + favorite.Name, description: commandDescription(favorite), task: &favorite})
+	}
+	for _, group := range gradleGroups(tasks) {
+		items = append(items, browserEntry{
+			id:          "group:gradle:" + group,
+			kind:        groupEntry,
+			label:       "▸ " + group,
+			description: fmt.Sprintf("%d commands", len(tasksInGroup(tasks, group))),
+			adapter:     "gradle",
+			group:       group,
+		})
+	}
+	return items
+}
+
+func favoriteOrder(task domain.Task) string {
+	priority := map[string]string{"bootRun": "0", "build": "1", "clean": "2", "test": "3"}
+	if value, exists := priority[task.Name]; exists {
+		return value
+	}
+	return "9" + task.Name
+}
+
+func gradleGroups(tasks []domain.Task) []string {
+	groups := map[string]bool{}
+	for _, task := range tasks {
+		group := task.Group
+		if group == "" {
+			group = "Other tasks"
+		}
+		groups[group] = true
+	}
+	return sortedKeys(groups)
+}
+
+func tasksInGroup(tasks []domain.Task, group string) []domain.Task {
+	var matches []domain.Task
+	for _, task := range tasks {
+		taskGroup := task.Group
+		if taskGroup == "" {
+			taskGroup = "Other tasks"
+		}
+		if taskGroup == group {
+			matches = append(matches, task)
+		}
+	}
+	return matches
 }
 
 func adapterCount(tasks []domain.Task) int { return len(adapters(tasks)) }
@@ -230,7 +340,7 @@ func (m model) Init() tea.Cmd { return nil }
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := message.(tea.WindowSizeMsg); ok {
-		height := size.Height - 1
+		height := size.Height - m.footerHeight()
 		if height < 1 {
 			height = 1
 		}
@@ -245,13 +355,18 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if selected.kind == taskEntry {
 				if key.String() == "enter" {
+					m.stack[len(m.stack)-1].selectedID = selected.id
 					m.selected = selected.task.ID
 					return m, tea.Quit
 				}
 				break
 			}
 			m.stack[len(m.stack)-1].selectedID = selected.id
-			m.stack = append(m.stack, location{modulePath: selected.modulePath, adapter: selected.adapter})
+			modulePath := selected.modulePath
+			if modulePath == "" {
+				modulePath = m.current().modulePath
+			}
+			m.stack = append(m.stack, location{modulePath: modulePath, adapter: selected.adapter, group: selected.group})
 			m.refreshList()
 			return m, nil
 		case "left", "backspace", "esc":
@@ -270,16 +385,35 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	return m.list.View() + "\nEnter/→ open · ← back · Enter on a command runs · / search · q quit"
+	footer := "Enter/→ open · ← back · Enter on a command runs · / search · q quit"
+	if m.notice != "" {
+		footer = m.notice + "\n" + footer
+	}
+	return m.list.View() + "\n" + footer
+}
+
+func (m model) footerHeight() int {
+	if m.notice != "" {
+		return 2
+	}
+	return 1
 }
 
 func Select(in io.Reader, out io.Writer, tasks []domain.Task) (string, error) {
-	program := tea.NewProgram(newModel(tasks), tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen())
+	selection, err := SelectWithState(in, out, tasks, State{})
+	return selection.TaskID, err
+}
+
+// SelectWithState opens the TUI at a previously selected command when state
+// comes from an earlier task execution.
+func SelectWithState(in io.Reader, out io.Writer, tasks []domain.Task, state State) (Selection, error) {
+	program := tea.NewProgram(newModelWithState(tasks, state), tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen())
 	result, err := program.Run()
 	if err != nil {
-		return "", err
+		return Selection{}, err
 	}
-	return result.(model).selected, nil
+	m := result.(model)
+	return Selection{TaskID: m.selected, State: m.state()}, nil
 }
 
 func commandDescription(task domain.Task) string {

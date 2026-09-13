@@ -85,10 +85,12 @@ ldr list --json
 ldr refresh
 ```
 
-LDR statically discovers common Gradle (`clean`, `build`, `test`, Spring Boot
-`bootRun`), Maven lifecycle, package.json script, and Go build/test tasks. It
-stores a SHA-256 manifest and normalized task registry under `.ldr/cache/`;
-unchanged projects reuse that cache, while `ldr refresh` rebuilds it.
+LDR asks a Gradle wrapper for its configured `tasks --all` report, so plugin
+and project-specific tasks such as `integrationTest` are discovered alongside
+common Gradle tasks. Maven lifecycle, package.json scripts, and Go build/test
+tasks are statically discovered. The normalized registry is cached under
+`.ldr/cache/`; unchanged projects reuse it, while `ldr refresh` rebuilds it
+and reruns the Gradle report when a wrapper is present.
 
 Run any discovered task by its ID:
 
@@ -121,7 +123,11 @@ Tasks are organized as `folder → module → adapter → command`: for example,
 the first pane lists project modules plus root-level tools; use Right or Enter
 to open an item and Left to go back. The current path stays visible in the
 compact breadcrumb at the top. Enter on a command runs it; `/` filters and `q`
-quits. `ldr tui` opens the same launcher explicitly.
+quits. Gradle panes place `bootRun`, `build`, `clean`, and `test` at the top
+as favorites, then organize the remaining commands using Gradle's task groups.
+After a command exits (including a server stopped with Ctrl+C), LDR returns to
+that same selected command; press Enter to run it again. `ldr tui` opens the
+same launcher explicitly.
 
 ## Profiles
 

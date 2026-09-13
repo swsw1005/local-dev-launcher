@@ -7,6 +7,7 @@ type Task struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Group       string   `json:"group,omitempty"`
+	Favorite    bool     `json:"favorite,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Adapter     string   `json:"adapter"`
 	Module      string   `json:"module,omitempty"`

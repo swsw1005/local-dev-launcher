@@ -26,17 +26,24 @@ func TestRootListsModulesAndRootAdapter(t *testing.T) {
 	}
 }
 
-func TestModuleShowsItsSingleAdapterCommandsDirectly(t *testing.T) {
-	tasks := []domain.Task{{ID: "gradle.api.clean", Name: "clean", Adapter: "gradle", ModulePath: "homeops-admin-api", Command: "./gradlew", Args: []string{":homeops-admin-api:clean"}}}
+func TestGradleModuleShowsFavoritesThenTaskCategories(t *testing.T) {
+	tasks := []domain.Task{
+		{ID: "gradle.api.clean", Name: "clean", Favorite: true, Group: "Build tasks", Adapter: "gradle", ModulePath: "homeops-admin-api", Command: "./gradlew", Args: []string{":homeops-admin-api:clean"}},
+		{ID: "gradle.api.integrationTest", Name: "integrationTest", Group: "Verification tasks", Adapter: "gradle", ModulePath: "homeops-admin-api", Command: "./gradlew", Args: []string{":homeops-admin-api:integrationTest"}},
+	}
 	m := newModel(tasks)
 	m.stack = append(m.stack, location{modulePath: "homeops-admin-api"})
 	items := m.entries()
-	if len(items) != 1 {
-		t.Fatalf("module items = %d, want one command", len(items))
+	if len(items) != 3 {
+		t.Fatalf("module items = %d, want favorite and two categories", len(items))
 	}
 	entry := items[0].(browserEntry)
-	if entry.kind != taskEntry || entry.label != "clean" || entry.description != "./gradlew :homeops-admin-api:clean" {
-		t.Fatalf("module command = %#v", entry)
+	if entry.kind != taskEntry || entry.label != "★ clean" || entry.description != "./gradlew :homeops-admin-api:clean" {
+		t.Fatalf("favorite command = %#v", entry)
+	}
+	category := items[2].(browserEntry)
+	if category.kind != groupEntry || category.label != "▸ Verification tasks" {
+		t.Fatalf("category = %#v", category)
 	}
 }
 

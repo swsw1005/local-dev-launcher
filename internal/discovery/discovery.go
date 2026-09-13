@@ -16,7 +16,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/state"
 )
 
-const cacheVersion = 3
+const cacheVersion = 5
 
 type Source struct {
 	Path     string `json:"path"`
@@ -55,7 +55,7 @@ func LoadOrDiscover(root string, layout state.Layout, force bool) (Result, error
 		}
 	}
 
-	tasks, err := Discover(root)
+	tasks, err := DiscoverWithGradle(root)
 	if err != nil {
 		return Result{}, err
 	}
@@ -66,6 +66,41 @@ func LoadOrDiscover(root string, layout state.Layout, force bool) (Result, error
 		return Result{}, err
 	}
 	return Result{Tasks: tasks}, nil
+}
+
+// DiscoverWithGradle enriches static discovery with Gradle's authoritative
+// task report when a project provides a wrapper. A failed report (for example,
+// a missing private repository credential) does not make the launcher unusable:
+// the static Gradle task set remains available.
+func DiscoverWithGradle(root string) ([]domain.Task, error) {
+	tasks, err := Discover(root)
+	if err != nil {
+		return nil, err
+	}
+	dynamic, err := discoverGradleTasks(root)
+	if err != nil {
+		return tasks, nil
+	}
+	return mergeTasks(tasks, dynamic), nil
+}
+
+func mergeTasks(static, dynamic []domain.Task) []domain.Task {
+	byID := make(map[string]domain.Task, len(static)+len(dynamic))
+	for _, task := range static {
+		byID[task.ID] = task
+	}
+	for _, task := range dynamic {
+		if fallback, exists := byID[task.ID]; exists && fallback.Favorite {
+			task.Favorite = true
+		}
+		byID[task.ID] = task
+	}
+	tasks := make([]domain.Task, 0, len(byID))
+	for _, task := range byID {
+		tasks = append(tasks, task)
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	return tasks
 }
 
 // Sources returns checksummed files whose changes can affect discovery.
@@ -208,7 +243,7 @@ func gradleTask(module, relative, command, name string) domain.Task {
 		path = ":" + relative + ":" + name
 	}
 	modulePath := relative
-	return domain.Task{ID: "gradle." + module + "." + name, Name: name, Adapter: "gradle", Module: module, ModulePath: modulePath, WorkingDir: ".", Command: command, Args: []string{path}}
+	return domain.Task{ID: "gradle." + module + "." + name, Name: name, Favorite: true, Adapter: "gradle", Module: module, ModulePath: modulePath, WorkingDir: ".", Command: command, Args: []string{path}}
 }
 
 type packageFile struct {

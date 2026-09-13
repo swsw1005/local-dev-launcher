@@ -39,6 +39,39 @@ func TestDiscoverNormalizesSupportedProjectTasks(t *testing.T) {
 	}
 }
 
+func TestParseGradleTasksIncludesCustomAndModuleTasks(t *testing.T) {
+	output := `
+Application tasks
+-----------------
+homeops-agent-api:bootRun - Runs this project.
+
+Verification tasks
+------------------
+homeops-agent-api:integrationTest - Runs integration tests.
+localKindE2e - Runs local E2E checks.
+
+BUILD SUCCESSFUL in 1s
+`
+	tasks := parseGradleTasks(output, "./gradlew")
+	byID := map[string]bool{}
+	for _, task := range tasks {
+		byID[task.ID] = task.ID == "gradle.homeops-agent-api.integrationTest" && task.Args[0] == ":homeops-agent-api:integrationTest" && task.Group == "Verification tasks" ||
+			byID[task.ID]
+	}
+	if !byID["gradle.homeops-agent-api.integrationTest"] {
+		t.Fatalf("integrationTest was not parsed: %#v", tasks)
+	}
+	var local bool
+	for _, task := range tasks {
+		if task.ID == "gradle.root.localKindE2e" && task.Args[0] == "localKindE2e" {
+			local = true
+		}
+	}
+	if !local {
+		t.Fatalf("root custom task was not parsed: %#v", tasks)
+	}
+}
+
 func TestLoadOrDiscoverUsesCacheUntilSourceChanges(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "package.json", `{"scripts":{"dev":"vite"}}`)
