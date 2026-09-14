@@ -96,3 +96,41 @@ func TestFindArchiveHomeFlattensMacOSJavaHome(t *testing.T) {
 		t.Fatalf("home = %q, want %q", home, want)
 	}
 }
+
+func TestRemoveActiveRuntimeRemovesLinksAndSelection(t *testing.T) {
+	store := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("LDR_RUNTIME_HOME", store)
+	t.Setenv("HOME", home)
+	runtimePath := filepath.Join(store, "java", "21", "bin")
+	if err := os.MkdirAll(runtimePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"java", "javac"} {
+		if err := os.WriteFile(filepath.Join(runtimePath, name), []byte("runtime"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Activate("java", "21"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove("java", "21"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "bin", "java")); !os.IsNotExist(err) {
+		t.Fatalf("java shell link still exists: %v", err)
+	}
+	installed, err := ListInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installed) != 0 {
+		t.Fatalf("installed = %#v, want no removed runtime", installed)
+	}
+}
+
+func TestRemoveRejectsAPathLikeRuntimeFamily(t *testing.T) {
+	if err := Remove("java", "../outside"); err == nil {
+		t.Fatal("Remove accepted a path-like family")
+	}
+}

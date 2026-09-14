@@ -27,9 +27,18 @@ LDR can also download and update the Java, Node, and Go runtimes it resolves.
 Run `ldr install --help` for the runtime installer commands.
 
 After installation, LDR activates the newest selected family through `~/bin`
-links (`java`/`javac`, `node`/`npm`/`npx`, or `go`/`gofmt`). Use `ldr runtime
+links (`java`/`javac`, `node`/`npm`/`npx`/`pnpm`, or `go`/`gofmt`). Use `ldr runtime
 list` to inspect installed families and `ldr runtime use java 21` to change the
 shell-active version.
+
+Use `ldr runtime remove java 21` to remove an installed runtime family. If it
+is active, its `~/bin` links are removed too.
+
+`ldr init-shell` creates or extends `~/.shell_paths` without discarding its
+existing contents, then makes Bash and Zsh source it. The generated file keeps
+`~/bin`, Homebrew, and local-bin paths consistent. If
+`~/Library/Application Support/local-dev-runner/shell/banner.sh` exists, it is
+sourced only by interactive shells; no banner is shown when it is absent.
 
 ## Install on macOS
 

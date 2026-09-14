@@ -25,7 +25,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -43,6 +43,7 @@ Commands:
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
   runtime ...       List installed runtimes or activate one for the shell
+  init-shell        Configure shared Bash/Zsh PATH and optional banner support
   profile ...       Create and inspect user execution profiles
   tui               Open the interactive task launcher
   help              Show this help
@@ -100,6 +101,15 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 		return a.runtime(args[1:])
 	case args[0] == "use":
 		return a.runtime(append([]string{"use"}, args[1:]...))
+	case args[0] == "init-shell":
+		if len(args) == 2 && isHelp(args[1]) {
+			_, err := fmt.Fprint(a.out, initShellHelp)
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: ldr init-shell")
+		}
+		return a.initShell()
 	case args[0] == "list":
 		jsonOutput, err := validateListArgs(args[1:])
 		if err != nil {
@@ -206,11 +216,14 @@ Usage:
   ldr runtime list              List installed Java, Node, and Go families
   ldr runtime use <runtime> <version>
                                 Activate one installed family via ~/bin links
+  ldr runtime remove <runtime> <version>
+                                Remove one installed family and its active links
   ldr use <runtime> <version>   Alias for ldr runtime use
 
 Examples:
   ldr runtime list
   ldr runtime use java 21
+  ldr runtime remove node 20
   ldr use node 24
 
 LDR updates only symlinks in ~/bin for the selected runtime. Ensure ~/bin is
@@ -241,8 +254,15 @@ func (a App) runtime(args []string) error {
 		_, err := fmt.Fprint(a.out, runtimeHelp)
 		return err
 	}
+	if len(args) == 3 && args[0] == "remove" {
+		if err := runtimes.Remove(args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "Removed %s %s\n", args[1], args[2])
+		return nil
+	}
 	if len(args) != 3 || args[0] != "use" {
-		return errors.New("usage: ldr runtime use <java|node|go> <version>")
+		return errors.New("usage: ldr runtime <list|use|remove> [java|node|go] [version]")
 	}
 	activation, err := runtimes.Activate(args[1], args[2])
 	if err != nil {
@@ -251,6 +271,30 @@ func (a App) runtime(args []string) error {
 	fmt.Fprintf(a.out, "Activated %s %s\n%s\n", activation.Runtime, activation.Family, strings.Join(activation.Links, "\n"))
 	return nil
 }
+
+func (a App) initShell() error {
+	result, err := runtimes.InitShell()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Configured shared shell paths: %s\n", result.ShellPaths)
+	fmt.Fprintf(a.out, "Optional banner location: %s/banner.sh\n", result.ShellHome)
+	fmt.Fprintln(a.out, "Open a new shell or run `exec zsh -l` to apply it.")
+	return nil
+}
+
+const initShellHelp = `Configure shared shell paths
+
+Usage:
+  ldr init-shell
+
+Creates or extends ~/.shell_paths while retaining its existing content, then
+makes ~/.bashrc and ~/.zshrc source it. The shared file keeps ~/bin,
+/opt/homebrew/bin, and ~/.local/bin on PATH without duplicate entries.
+
+If ~/Library/Application Support/local-dev-runner/shell/banner.sh exists, it is
+sourced only in interactive shells. Missing banner.sh files are ignored.
+`
 
 func parseInstallArgs(args []string) (runtimes.InstallRequest, bool, error) {
 	if len(args) == 0 {

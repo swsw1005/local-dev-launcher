@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -41,6 +42,15 @@ func ListInstalled() ([]Installation, error) {
 	}
 	active, err := readActiveState(store)
 	if err != nil {
+		return nil, err
+	}
+	// Persist the reconciliation done by readActiveState so manually removed
+	// runtime directories cannot leave a stale active selection behind.
+	if _, err := os.Stat(activeStatePath(store)); err == nil {
+		if err := writeActiveState(store, active); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	var installations []Installation
@@ -78,6 +88,9 @@ func ListInstalled() ([]Installation, error) {
 // overwritten.
 func Activate(runtime, family string) (Activation, error) {
 	runtime = normalizeRuntime(runtime)
+	if err := validateFamily(family); err != nil {
+		return Activation{}, err
+	}
 	spec, ok := runtimeSpecFor(runtime)
 	if !ok {
 		return Activation{}, fmt.Errorf("unsupported runtime %q", runtime)
@@ -133,6 +146,58 @@ func Activate(runtime, family string) (Activation, error) {
 	return Activation{Runtime: runtime, Family: family, Links: links}, nil
 }
 
+// Remove deletes one installed family. If it is active, its LDR shell links
+// and selection record are removed as well. The target is always resolved
+// below LDR's runtime store.
+func Remove(runtime, family string) error {
+	runtime = normalizeRuntime(runtime)
+	if err := validateFamily(family); err != nil {
+		return err
+	}
+	spec, ok := runtimeSpecFor(runtime)
+	if !ok {
+		return fmt.Errorf("unsupported runtime %q", runtime)
+	}
+	store, err := StoreRoot()
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(store, runtime, family)
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s %s is not installed", runtime, family)
+		}
+		return err
+	}
+	active, err := readActiveState(store)
+	if err != nil {
+		return err
+	}
+	if active[runtime].Family == family {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		for _, executable := range spec.executables {
+			link := filepath.Join(home, "bin", filepath.Base(executable))
+			targetLink, err := os.Readlink(link)
+			if err == nil && filepath.Clean(targetLink) == filepath.Join(target, executable) {
+				if err := os.Remove(link); err != nil {
+					return err
+				}
+			}
+		}
+		delete(active, runtime)
+		if err := writeActiveState(store, active); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return err
+	}
+	return nil
+}
+
 type runtimeSpec struct {
 	runtime     string
 	executables []string
@@ -141,7 +206,7 @@ type runtimeSpec struct {
 func runtimeSpecs() []runtimeSpec {
 	return []runtimeSpec{
 		{runtime: "java", executables: []string{"bin/java", "bin/javac"}},
-		{runtime: "node", executables: []string{"bin/node", "bin/npm", "bin/npx"}},
+		{runtime: "node", executables: []string{"bin/node", "bin/npm", "bin/npx", "bin/pnpm"}},
 		{runtime: "go", executables: []string{"bin/go", "bin/gofmt"}},
 	}
 }
@@ -162,6 +227,13 @@ func normalizeRuntime(runtime string) string {
 	return runtime
 }
 
+func validateFamily(family string) error {
+	if family == "" || family == "." || family == ".." || filepath.Base(family) != family || strings.ContainsAny(family, `/\\`) {
+		return fmt.Errorf("invalid runtime family %q", family)
+	}
+	return nil
+}
+
 func activeStatePath(store string) string { return filepath.Join(store, "active.json") }
 
 func readActiveState(store string) (activeState, error) {
@@ -175,6 +247,11 @@ func readActiveState(store string) (activeState, error) {
 	var state activeState
 	if err := json.Unmarshal(contents, &state); err != nil {
 		return nil, err
+	}
+	for runtime, selection := range state {
+		if _, err := os.Stat(filepath.Join(store, runtime, selection.Family)); errors.Is(err, os.ErrNotExist) {
+			delete(state, runtime)
+		}
 	}
 	return state, nil
 }

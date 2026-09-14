@@ -39,11 +39,16 @@ LDR discovers `go.mod` and `go.work`.
 
 On macOS, `ldr install` downloads runtimes into these stable paths and replaces
 only the selected family after verifying the vendor-provided SHA-256 checksum.
-It never installs into a project directory or changes the shell's global PATH.
+It never installs into a project directory. `ldr init-shell` is the separate,
+opt-in command that configures shared Bash/Zsh PATH handling.
 
 - `ldr install java 21`, `ldr install node 24`, and `ldr install go 1.26`
   install or update one family.
 - `ldr install java --lts` and `ldr install node --lts` install the five newest
-  LTS families from the vendor release metadata.
+  LTS families from the vendor release metadata. Families without an archive
+  for the current macOS architecture are skipped rather than failing the whole
+  LTS installation.
 - `ldr install all` installs the latest Java, Node, and Go families;
   `ldr install all --lts` uses LTS families for Java and Node.
+- Node installation also installs `pnpm` in that Node family. Activating the
+  family links `node`, `npm`, `npx`, and `pnpm` under `~/bin`.

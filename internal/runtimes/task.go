@@ -71,7 +71,14 @@ func resolveNodeTask(root, store string, resolution TaskResolution) (TaskResolut
 	switch commandName {
 	case "npm", "npx", "node", "corepack":
 		resolution.Task.Command = filepath.Join(nodeBin, resolution.Task.Command)
-	case "pnpm", "yarn":
+	case "pnpm":
+		pnpm := filepath.Join(nodeBin, "pnpm")
+		if _, err := os.Stat(pnpm); err == nil {
+			resolution.Task.Command = pnpm
+			break
+		}
+		fallthrough
+	case "yarn":
 		// Corepack is shipped with Node and is a stable way to activate the
 		// package-manager version declared by package.json.
 		resolution.Task.Command = filepath.Join(nodeBin, "corepack")
