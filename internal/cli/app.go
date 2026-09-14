@@ -25,7 +25,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -42,6 +42,7 @@ Commands:
   stop <process-id> Stop a managed process
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
+  runtime ...       List installed runtimes or activate one for the shell
   profile ...       Create and inspect user execution profiles
   tui               Open the interactive task launcher
   help              Show this help
@@ -95,6 +96,10 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 		return a.initialize(ctx, directory, false)
 	case args[0] == "install":
 		return a.install(ctx, args[1:])
+	case args[0] == "runtime":
+		return a.runtime(args[1:])
+	case args[0] == "use":
+		return a.runtime(append([]string{"use"}, args[1:]...))
 	case args[0] == "list":
 		jsonOutput, err := validateListArgs(args[1:])
 		if err != nil {
@@ -176,9 +181,74 @@ func (a App) install(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	selected := map[string]runtimes.InstalledRuntime{}
 	for _, item := range installed {
 		fmt.Fprintf(a.out, "Installed %s %s (%s)\n%s\n", item.Runtime, item.Family, item.Version, item.Path)
+		selected[item.Runtime] = item
 	}
+	for _, runtimeName := range []string{"java", "node", "go"} {
+		item, ok := selected[runtimeName]
+		if !ok {
+			continue
+		}
+		activation, err := runtimes.Activate(item.Runtime, item.Family)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "Activated %s %s for this shell via %s\n", activation.Runtime, activation.Family, strings.Join(activation.Links, ", "))
+	}
+	return nil
+}
+
+const runtimeHelp = `Manage shell-active runtimes
+
+Usage:
+  ldr runtime list              List installed Java, Node, and Go families
+  ldr runtime use <runtime> <version>
+                                Activate one installed family via ~/bin links
+  ldr use <runtime> <version>   Alias for ldr runtime use
+
+Examples:
+  ldr runtime list
+  ldr runtime use java 21
+  ldr use node 24
+
+LDR updates only symlinks in ~/bin for the selected runtime. Ensure ~/bin is
+on PATH (it is already present in this environment).
+`
+
+func (a App) runtime(args []string) error {
+	if len(args) == 0 || (len(args) == 1 && args[0] == "list") {
+		installed, err := runtimes.ListInstalled()
+		if err != nil {
+			return err
+		}
+		if len(installed) == 0 {
+			fmt.Fprintln(a.out, "No LDR-managed runtimes are installed. Run `ldr install --help`.")
+			return nil
+		}
+		fmt.Fprintln(a.out, "RUNTIME\tFAMILY\tACTIVE\tPATH")
+		for _, item := range installed {
+			active := ""
+			if item.Active {
+				active = "*"
+			}
+			fmt.Fprintf(a.out, "%s\t%s\t%s\t%s\n", item.Runtime, item.Family, active, item.Path)
+		}
+		return nil
+	}
+	if len(args) == 1 && isHelp(args[0]) {
+		_, err := fmt.Fprint(a.out, runtimeHelp)
+		return err
+	}
+	if len(args) != 3 || args[0] != "use" {
+		return errors.New("usage: ldr runtime use <java|node|go> <version>")
+	}
+	activation, err := runtimes.Activate(args[1], args[2])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Activated %s %s\n%s\n", activation.Runtime, activation.Family, strings.Join(activation.Links, "\n"))
 	return nil
 }
 
