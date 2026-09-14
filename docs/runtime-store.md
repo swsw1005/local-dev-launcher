@@ -12,15 +12,13 @@ checkout. The default path is platform specific:
 Set `LDR_RUNTIME_HOME` to override this location, for example for a shared
 volume. Project-local `.ldr/` directories never contain installed runtimes.
 
-The store exposes stable paths while retaining the runtime manager's actual
-installations below `mise/installs/`:
+The store exposes stable paths by runtime family:
 
 ```text
 runtimes/
-├── java/<major>       -> mise/installs/java/<exact-version>
-├── node/<major>       -> mise/installs/node/<exact-version>
-├── go/1.<minor>       -> mise/installs/go/<exact-version>
-└── mise/installs/
+├── java/<major>
+├── node/<major>
+└── go/1.<minor>
 ```
 
 ## Go resolution policy
@@ -37,5 +35,15 @@ LDR discovers `go.mod` and `go.work`.
   installed patch in that family. LDR records both the requested version and
   the resolved exact version in its runtime cache.
 
-The first MVP resolves and verifies these runtimes only. It does not download,
-upgrade, or silently switch them.
+## Installation and updates
+
+On macOS, `ldr install` downloads runtimes into these stable paths and replaces
+only the selected family after verifying the vendor-provided SHA-256 checksum.
+It never installs into a project directory or changes the shell's global PATH.
+
+- `ldr install java 21`, `ldr install node 24`, and `ldr install go 1.26`
+  install or update one family.
+- `ldr install java --lts` and `ldr install node --lts` install the five newest
+  LTS families from the vendor release metadata.
+- `ldr install all` installs the latest Java, Node, and Go families;
+  `ldr install all --lts` uses LTS families for Java and Node.

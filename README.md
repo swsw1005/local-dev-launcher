@@ -23,6 +23,9 @@ The MVP CLI core currently provides:
 Gradle, Maven, Node, and Go task discovery, the Finder-style TUI, and
 long-running process management are available on macOS.
 
+LDR can also download and update the Java, Node, and Go runtimes it resolves.
+Run `ldr install --help` for the runtime installer commands.
+
 ## Install on macOS
 
 Go is not required for normal installation. Download the matching prebuilt

@@ -86,6 +86,21 @@ func TestHelpAndVersion(t *testing.T) {
 	}
 }
 
+func TestParseInstallArgs(t *testing.T) {
+	request, choose, err := parseInstallArgs([]string{"java", "21"})
+	if err != nil || choose || request.Runtime != "java" || request.Version != "21" {
+		t.Fatalf("java request = %#v, choose=%v, err=%v", request, choose, err)
+	}
+	request, choose, err = parseInstallArgs([]string{"node", "--lts"})
+	if err != nil || choose || !request.LTS || request.Runtime != "node" {
+		t.Fatalf("node LTS request = %#v, choose=%v, err=%v", request, choose, err)
+	}
+	_, choose, err = parseInstallArgs([]string{"go"})
+	if err != nil || !choose {
+		t.Fatalf("Go without a family should prompt: choose=%v, err=%v", choose, err)
+	}
+}
+
 func TestListOutputsDiscoveredTasksAsJSON(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {

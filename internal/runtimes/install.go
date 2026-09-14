@@ -1,0 +1,531 @@
+package runtimes
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	nodeIndexURL        = "https://nodejs.org/dist/index.json"
+	adoptiumReleasesURL = "https://api.adoptium.net/v3/info/available_releases"
+	goDownloadsURL      = "https://go.dev/dl/?mode=json&include=all"
+	ltsInstallCount     = 5
+)
+
+// InstallRequest accepts runtime families instead of patches. Java and Node
+// use an integer major; Go uses its language family (for example 1.26).
+type InstallRequest struct {
+	Runtime string
+	Version string
+	LTS     bool
+	All     bool
+}
+
+type InstalledRuntime struct {
+	Runtime string
+	Family  string
+	Version string
+	Path    string
+}
+
+// Installer obtains release metadata and archives only from the runtime
+// vendors' HTTPS endpoints. Client can be replaced in tests.
+type Installer struct {
+	Client *http.Client
+	GOOS   string
+	GOARCH string
+}
+
+func NewInstaller() Installer {
+	return Installer{Client: &http.Client{Timeout: 2 * time.Minute}, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+}
+
+// Install downloads and atomically places selected runtimes in LDR's shared
+// store. It is intentionally macOS-only for this release.
+func (i Installer) Install(ctx context.Context, request InstallRequest) ([]InstalledRuntime, error) {
+	if i.GOOS != "darwin" {
+		return nil, fmt.Errorf("runtime installation is currently supported on macOS only")
+	}
+	if i.Client == nil {
+		i.Client = &http.Client{Timeout: 2 * time.Minute}
+	}
+	store, err := StoreRoot()
+	if err != nil {
+		return nil, err
+	}
+	if request.All {
+		var installed []InstalledRuntime
+		for _, name := range []string{"java", "node", "go"} {
+			items, err := i.Install(ctx, InstallRequest{Runtime: name, LTS: request.LTS && name != "go"})
+			if err != nil {
+				return installed, err
+			}
+			installed = append(installed, items...)
+		}
+		return installed, nil
+	}
+	switch request.Runtime {
+	case "node":
+		return i.installNode(ctx, store, request)
+	case "java":
+		return i.installJava(ctx, store, request)
+	case "go", "golang":
+		return i.installGo(ctx, store, request)
+	default:
+		return nil, fmt.Errorf("unsupported runtime %q (choose java, node, or go)", request.Runtime)
+	}
+}
+
+type archiveRelease struct {
+	Runtime string
+	Family  string
+	Version string
+	URL     string
+	SHA256  string
+	Home    string
+}
+
+type nodeRelease struct {
+	Version string          `json:"version"`
+	LTS     json.RawMessage `json:"lts"`
+}
+
+func (i Installer) installNode(ctx context.Context, store string, request InstallRequest) ([]InstalledRuntime, error) {
+	if request.Version != "" && request.LTS {
+		return nil, errors.New("choose either a Node major or --lts")
+	}
+	var releases []nodeRelease
+	if err := i.getJSON(ctx, nodeIndexURL, &releases); err != nil {
+		return nil, fmt.Errorf("get Node releases: %w", err)
+	}
+	selected := map[int]nodeRelease{}
+	for _, release := range releases { // Node's index is newest first.
+		major, err := versionMajor(release.Version)
+		if err != nil || selected[major].Version != "" {
+			continue
+		}
+		if request.Version != "" && request.Version != strconv.Itoa(major) {
+			continue
+		}
+		if request.LTS && string(release.LTS) == "false" {
+			continue
+		}
+		selected[major] = release
+		if request.Version != "" || (!request.LTS && request.Version == "") {
+			break
+		}
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("no Node release matches %q", request.Version)
+	}
+	majors := sortedIntKeys(selected)
+	if request.LTS && len(majors) > ltsInstallCount {
+		majors = majors[len(majors)-ltsInstallCount:]
+	}
+	arch := "arm64"
+	if i.GOARCH == "amd64" {
+		arch = "x64"
+	}
+	var installed []InstalledRuntime
+	for _, major := range majors {
+		release := selected[major]
+		file := "node-" + release.Version + "-darwin-" + arch + ".tar.gz"
+		base := "https://nodejs.org/dist/" + release.Version + "/"
+		checksum, err := i.nodeChecksum(ctx, base+"SHASUMS256.txt", file)
+		if err != nil {
+			return installed, err
+		}
+		item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "node", Family: strconv.Itoa(major), Version: release.Version, URL: base + file, SHA256: checksum, Home: "bin/node"})
+		if err != nil {
+			return installed, err
+		}
+		installed = append(installed, item)
+	}
+	return installed, nil
+}
+
+type adoptiumReleases struct {
+	AvailableLTSReleases []int `json:"available_lts_releases"`
+	AvailableReleases    []int `json:"available_releases"`
+}
+
+type adoptiumAsset struct {
+	Binary struct {
+		Package struct {
+			Link     string `json:"link"`
+			Checksum string `json:"checksum"`
+		} `json:"package"`
+	} `json:"binary"`
+}
+
+func (i Installer) installJava(ctx context.Context, store string, request InstallRequest) ([]InstalledRuntime, error) {
+	if request.Version != "" && request.LTS {
+		return nil, errors.New("choose either a Java major or --lts")
+	}
+	var available adoptiumReleases
+	if err := i.getJSON(ctx, adoptiumReleasesURL, &available); err != nil {
+		return nil, fmt.Errorf("get Java releases: %w", err)
+	}
+	majors := []int{}
+	if request.Version != "" {
+		major, err := strconv.Atoi(request.Version)
+		if err != nil || major < 8 {
+			return nil, fmt.Errorf("invalid Java major %q", request.Version)
+		}
+		majors = []int{major}
+	} else if request.LTS {
+		majors = append(majors, available.AvailableLTSReleases...)
+		sort.Ints(majors)
+		if len(majors) > ltsInstallCount {
+			majors = majors[len(majors)-ltsInstallCount:]
+		}
+	} else {
+		if len(available.AvailableReleases) == 0 {
+			return nil, errors.New("no Java releases are available")
+		}
+		sort.Ints(available.AvailableReleases)
+		majors = []int{available.AvailableReleases[len(available.AvailableReleases)-1]}
+	}
+	arch := "aarch64"
+	if i.GOARCH == "amd64" {
+		arch = "x64"
+	}
+	var installed []InstalledRuntime
+	for _, major := range majors {
+		endpoint := fmt.Sprintf("https://api.adoptium.net/v3/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=mac&vendor=eclipse", major, arch)
+		var assets []adoptiumAsset
+		if err := i.getJSON(ctx, endpoint, &assets); err != nil {
+			return installed, fmt.Errorf("get Java %d: %w", major, err)
+		}
+		if len(assets) == 0 || assets[0].Binary.Package.Link == "" || assets[0].Binary.Package.Checksum == "" {
+			return installed, fmt.Errorf("Java %d has no macOS %s archive", major, arch)
+		}
+		item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "java", Family: strconv.Itoa(major), Version: strconv.Itoa(major), URL: assets[0].Binary.Package.Link, SHA256: assets[0].Binary.Package.Checksum, Home: "Contents/Home/bin/java"})
+		if err != nil {
+			return installed, err
+		}
+		installed = append(installed, item)
+	}
+	return installed, nil
+}
+
+type goRelease struct {
+	Version string `json:"version"`
+	Stable  bool   `json:"stable"`
+	Files   []struct {
+		Filename string `json:"filename"`
+		OS       string `json:"os"`
+		Arch     string `json:"arch"`
+		Kind     string `json:"kind"`
+		SHA256   string `json:"sha256"`
+	} `json:"files"`
+}
+
+func (i Installer) installGo(ctx context.Context, store string, request InstallRequest) ([]InstalledRuntime, error) {
+	if request.LTS {
+		return nil, errors.New("Go has no LTS release line; use `ldr install go` or `ldr install go 1.26`")
+	}
+	var releases []goRelease
+	if err := i.getJSON(ctx, goDownloadsURL, &releases); err != nil {
+		return nil, fmt.Errorf("get Go releases: %w", err)
+	}
+	for _, release := range releases {
+		version, err := ParseGoVersion(release.Version)
+		if err != nil || !release.Stable || (request.Version != "" && version.Family() != strings.TrimPrefix(request.Version, "go")) {
+			continue
+		}
+		for _, file := range release.Files {
+			if file.OS != "darwin" || file.Arch != i.GOARCH || file.Kind != "archive" {
+				continue
+			}
+			item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "go", Family: version.Family(), Version: release.Version, URL: "https://go.dev/dl/" + file.Filename, SHA256: file.SHA256, Home: "bin/go"})
+			if err != nil {
+				return nil, err
+			}
+			return []InstalledRuntime{item}, nil
+		}
+	}
+	return nil, fmt.Errorf("no stable Go release matches %q", request.Version)
+}
+
+func (i Installer) installArchive(ctx context.Context, store string, release archiveRelease) (InstalledRuntime, error) {
+	archive, err := i.download(ctx, release.URL, release.SHA256)
+	if err != nil {
+		return InstalledRuntime{}, err
+	}
+	defer os.Remove(archive)
+	parent := filepath.Join(store, release.Runtime)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return InstalledRuntime{}, err
+	}
+	extract, err := os.MkdirTemp("", "ldr-runtime-extract-*")
+	if err != nil {
+		return InstalledRuntime{}, err
+	}
+	defer os.RemoveAll(extract)
+	if err := extractTarGz(archive, extract); err != nil {
+		return InstalledRuntime{}, fmt.Errorf("extract %s: %w", release.Runtime, err)
+	}
+	home, err := findArchiveHome(extract, filepath.FromSlash(release.Home))
+	if err != nil {
+		return InstalledRuntime{}, err
+	}
+	stage, err := os.MkdirTemp(parent, ".ldr-install-")
+	if err != nil {
+		return InstalledRuntime{}, err
+	}
+	if err := copyTree(home, stage); err != nil {
+		os.RemoveAll(stage)
+		return InstalledRuntime{}, err
+	}
+	target := filepath.Join(parent, release.Family)
+	backup := target + ".previous"
+	if err := os.RemoveAll(backup); err != nil {
+		os.RemoveAll(stage)
+		return InstalledRuntime{}, err
+	}
+	if _, err := os.Stat(target); err == nil {
+		if err := os.Rename(target, backup); err != nil {
+			os.RemoveAll(stage)
+			return InstalledRuntime{}, err
+		}
+	}
+	if err := os.Rename(stage, target); err != nil {
+		if _, backupErr := os.Stat(backup); backupErr == nil {
+			_ = os.Rename(backup, target)
+		}
+		os.RemoveAll(stage)
+		return InstalledRuntime{}, err
+	}
+	_ = os.RemoveAll(backup)
+	return InstalledRuntime{Runtime: release.Runtime, Family: release.Family, Version: release.Version, Path: target}, nil
+}
+
+func (i Installer) getJSON(ctx context.Context, endpoint string, output any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	response, err := i.Client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: %s", endpoint, response.Status)
+	}
+	return json.NewDecoder(response.Body).Decode(output)
+}
+
+func (i Installer) nodeChecksum(ctx context.Context, endpoint, filename string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := i.Client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s: %s", endpoint, response.Status)
+	}
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(contents), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.TrimPrefix(fields[1], "*") == filename {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("Node checksum for %s was not found", filename)
+}
+
+func (i Installer) download(ctx context.Context, endpoint, checksum string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := i.Client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: %s", endpoint, response.Status)
+	}
+	file, err := os.CreateTemp("", "ldr-runtime-*.tar.gz")
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(file, hash), response.Body); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(file.Name())
+		return "", err
+	}
+	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), strings.TrimSpace(checksum)) {
+		os.Remove(file.Name())
+		return "", fmt.Errorf("SHA-256 mismatch for %s", endpoint)
+	}
+	return file.Name(), nil
+}
+
+func extractTarGz(archive, destination string) error {
+	file, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gzipReader.Close()
+	reader := tar.NewReader(gzipReader)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name := filepath.Clean(header.Name)
+		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe archive path %q", header.Name)
+		}
+		path := filepath.Join(destination, name)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			output, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode)&0o755)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(output, reader); err != nil {
+				output.Close()
+				return err
+			}
+			if err := output.Close(); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(path), header.Linkname))
+			relative, err := filepath.Rel(destination, resolved)
+			if err != nil || filepath.IsAbs(header.Linkname) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("unsafe archive symlink %q", header.Linkname)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := os.Symlink(header.Linkname, path); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported archive entry %q", header.Name)
+		}
+	}
+}
+
+func findArchiveHome(root, executable string) (string, error) {
+	var home string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Name() != filepath.Base(executable) {
+			return err
+		}
+		candidate, err := filepath.Rel(root, path)
+		if err != nil || !strings.HasSuffix(filepath.ToSlash(candidate), filepath.ToSlash(executable)) {
+			return err
+		}
+		home = strings.TrimSuffix(path, executable)
+		return filepath.SkipAll
+	})
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		return "", fmt.Errorf("runtime archive did not contain %s", executable)
+	}
+	return home, nil
+}
+
+func copyTree(source, destination string) error {
+	return filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		closeErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+}
+
+func versionMajor(value string) (int, error) {
+	value = strings.TrimPrefix(value, "v")
+	part := strings.Split(value, ".")[0]
+	return strconv.Atoi(part)
+}
+
+func sortedIntKeys[T any](values map[int]T) []int {
+	keys := make([]int, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+	return keys
+}

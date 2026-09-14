@@ -11,12 +11,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/swsw1005/local-dev-launcher/internal/domain"
 	"github.com/swsw1005/local-dev-launcher/internal/state"
 )
 
-const cacheVersion = 5
+const cacheVersion = 6
+const dynamicTaskTimeout = 45 * time.Second
 
 type Source struct {
 	Path     string `json:"path"`
@@ -55,7 +57,7 @@ func LoadOrDiscover(root string, layout state.Layout, force bool) (Result, error
 		}
 	}
 
-	tasks, err := DiscoverWithGradle(root)
+	tasks, err := DiscoverWithDynamicTools(root)
 	if err != nil {
 		return Result{}, err
 	}
@@ -68,21 +70,27 @@ func LoadOrDiscover(root string, layout state.Layout, force bool) (Result, error
 	return Result{Tasks: tasks}, nil
 }
 
-// DiscoverWithGradle enriches static discovery with Gradle's authoritative
-// task report when a project provides a wrapper. A failed report (for example,
-// a missing private repository credential) does not make the launcher unusable:
-// the static Gradle task set remains available.
-func DiscoverWithGradle(root string) ([]domain.Task, error) {
+// DiscoverWithDynamicTools enriches static discovery with reports from the
+// project's build tools. A failed report (for example, a missing private
+// repository credential) does not make the launcher unusable: static tasks
+// remain available.
+func DiscoverWithDynamicTools(root string) ([]domain.Task, error) {
 	tasks, err := Discover(root)
 	if err != nil {
 		return nil, err
 	}
-	dynamic, err := discoverGradleTasks(root)
-	if err != nil {
-		return tasks, nil
+	for _, discover := range []func(string, []domain.Task) ([]domain.Task, error){discoverGradleTaskReport, discoverNodeTaskReport, discoverMavenTaskReport} {
+		dynamic, err := discover(root, tasks)
+		if err != nil {
+			continue
+		}
+		tasks = mergeTasks(tasks, dynamic)
 	}
-	return mergeTasks(tasks, dynamic), nil
+	return tasks, nil
 }
+
+// DiscoverWithGradle is retained for callers compiled against the v0.2 API.
+func DiscoverWithGradle(root string) ([]domain.Task, error) { return DiscoverWithDynamicTools(root) }
 
 func mergeTasks(static, dynamic []domain.Task) []domain.Task {
 	byID := make(map[string]domain.Task, len(static)+len(dynamic))
