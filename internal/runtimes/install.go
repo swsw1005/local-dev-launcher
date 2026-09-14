@@ -465,7 +465,11 @@ func findArchiveHome(root, executable string) (string, error) {
 		if err != nil || !strings.HasSuffix(filepath.ToSlash(candidate), filepath.ToSlash(executable)) {
 			return err
 		}
-		home = strings.TrimSuffix(path, executable)
+		// Every supported archive describes its executable below bin/. The
+		// managed family root is the directory above that bin directory: this
+		// flattens a macOS JDK's Contents/Home while preserving Node and Go
+		// archive roots unchanged.
+		home = filepath.Dir(filepath.Dir(path))
 		return filepath.SkipAll
 	})
 	if err != nil {

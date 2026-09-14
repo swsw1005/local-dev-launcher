@@ -1,0 +1,203 @@
+package runtimes
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+)
+
+// Installation is one runtime family available to LDR's resolver.
+type Installation struct {
+	Runtime string
+	Family  string
+	Path    string
+	Active  bool
+}
+
+// Activation records the shell links owned by LDR for an active family.
+type Activation struct {
+	Runtime string
+	Family  string
+	Links   []string
+}
+
+type activeState map[string]activeSelection
+
+type activeSelection struct {
+	Family    string    `json:"family"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// ListInstalled reports all ready runtime families and whether each is the
+// shell-active selection made through LDR.
+func ListInstalled() ([]Installation, error) {
+	store, err := StoreRoot()
+	if err != nil {
+		return nil, err
+	}
+	active, err := readActiveState(store)
+	if err != nil {
+		return nil, err
+	}
+	var installations []Installation
+	for _, spec := range runtimeSpecs() {
+		entries, err := os.ReadDir(filepath.Join(store, spec.runtime))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(store, spec.runtime, entry.Name())
+			if _, err := os.Stat(filepath.Join(path, spec.executables[0])); err != nil {
+				continue
+			}
+			selection := active[spec.runtime]
+			installations = append(installations, Installation{Runtime: spec.runtime, Family: entry.Name(), Path: path, Active: selection.Family == entry.Name() && linksMatch(spec, path)})
+		}
+	}
+	sort.Slice(installations, func(i, j int) bool {
+		if installations[i].Runtime == installations[j].Runtime {
+			return installations[i].Family < installations[j].Family
+		}
+		return installations[i].Runtime < installations[j].Runtime
+	})
+	return installations, nil
+}
+
+// Activate makes a selected family available from ~/bin. It updates only
+// existing symlinks or paths that LDR created; an ordinary user file is never
+// overwritten.
+func Activate(runtime, family string) (Activation, error) {
+	runtime = normalizeRuntime(runtime)
+	spec, ok := runtimeSpecFor(runtime)
+	if !ok {
+		return Activation{}, fmt.Errorf("unsupported runtime %q", runtime)
+	}
+	store, err := StoreRoot()
+	if err != nil {
+		return Activation{}, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Activation{}, err
+	}
+	runtimePath := filepath.Join(store, runtime, family)
+	for _, executable := range spec.executables {
+		if info, err := os.Stat(filepath.Join(runtimePath, executable)); err != nil || info.IsDir() {
+			if err == nil {
+				err = errors.New("not an executable")
+			}
+			return Activation{}, fmt.Errorf("%s %s is not installed: %w", runtime, family, err)
+		}
+	}
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		return Activation{}, err
+	}
+	links := make([]string, 0, len(spec.executables))
+	for _, executable := range spec.executables {
+		link := filepath.Join(bin, filepath.Base(executable))
+		if info, err := os.Lstat(link); err == nil {
+			if info.Mode()&os.ModeSymlink == 0 {
+				return Activation{}, fmt.Errorf("refusing to replace non-symlink %s", link)
+			}
+			if err := os.Remove(link); err != nil {
+				return Activation{}, err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Activation{}, err
+		}
+		target := filepath.Join(runtimePath, executable)
+		if err := os.Symlink(target, link); err != nil {
+			return Activation{}, err
+		}
+		links = append(links, link)
+	}
+	active, err := readActiveState(store)
+	if err != nil {
+		return Activation{}, err
+	}
+	active[runtime] = activeSelection{Family: family, UpdatedAt: time.Now().UTC()}
+	if err := writeActiveState(store, active); err != nil {
+		return Activation{}, err
+	}
+	return Activation{Runtime: runtime, Family: family, Links: links}, nil
+}
+
+type runtimeSpec struct {
+	runtime     string
+	executables []string
+}
+
+func runtimeSpecs() []runtimeSpec {
+	return []runtimeSpec{
+		{runtime: "java", executables: []string{"bin/java", "bin/javac"}},
+		{runtime: "node", executables: []string{"bin/node", "bin/npm", "bin/npx"}},
+		{runtime: "go", executables: []string{"bin/go", "bin/gofmt"}},
+	}
+}
+
+func runtimeSpecFor(runtime string) (runtimeSpec, bool) {
+	for _, spec := range runtimeSpecs() {
+		if spec.runtime == runtime {
+			return spec, true
+		}
+	}
+	return runtimeSpec{}, false
+}
+
+func normalizeRuntime(runtime string) string {
+	if runtime == "golang" {
+		return "go"
+	}
+	return runtime
+}
+
+func activeStatePath(store string) string { return filepath.Join(store, "active.json") }
+
+func readActiveState(store string) (activeState, error) {
+	contents, err := os.ReadFile(activeStatePath(store))
+	if errors.Is(err, os.ErrNotExist) {
+		return activeState{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var state activeState
+	if err := json.Unmarshal(contents, &state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func writeActiveState(store string, state activeState) error {
+	contents, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(activeStatePath(store), append(contents, '\n'), 0o644)
+}
+
+func linksMatch(spec runtimeSpec, runtimePath string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	for _, executable := range spec.executables {
+		link := filepath.Join(home, "bin", filepath.Base(executable))
+		target, err := os.Readlink(link)
+		if err != nil || filepath.Clean(target) != filepath.Join(runtimePath, executable) {
+			return false
+		}
+	}
+	return true
+}

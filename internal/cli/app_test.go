@@ -101,6 +101,17 @@ func TestParseInstallArgs(t *testing.T) {
 	}
 }
 
+func TestRuntimeHelp(t *testing.T) {
+	var out, errOut bytes.Buffer
+	app := New(strings.NewReader(""), &out, &errOut)
+	if err := app.Run(context.Background(), []string{"runtime", "--help"}, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "runtime use") {
+		t.Fatalf("help = %q", out.String())
+	}
+}
+
 func TestListOutputsDiscoveredTasksAsJSON(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {

@@ -26,6 +26,11 @@ long-running process management are available on macOS.
 LDR can also download and update the Java, Node, and Go runtimes it resolves.
 Run `ldr install --help` for the runtime installer commands.
 
+After installation, LDR activates the newest selected family through `~/bin`
+links (`java`/`javac`, `node`/`npm`/`npx`, or `go`/`gofmt`). Use `ldr runtime
+list` to inspect installed families and `ldr runtime use java 21` to change the
+shell-active version.
+
 ## Install on macOS
 
 Go is not required for normal installation. Download the matching prebuilt
