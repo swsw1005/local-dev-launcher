@@ -20,11 +20,12 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/process"
 	"github.com/swsw1005/local-dev-launcher/internal/profile"
 	"github.com/swsw1005/local-dev-launcher/internal/project"
+	"github.com/swsw1005/local-dev-launcher/internal/runtimes"
 	"github.com/swsw1005/local-dev-launcher/internal/state"
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -40,6 +41,7 @@ Commands:
   ps                List LDR-managed processes
   stop <process-id> Stop a managed process
   logs <process-id> Print process logs
+  install ...       Install or update shared Java, Node, and Go runtimes
   profile ...       Create and inspect user execution profiles
   tui               Open the interactive task launcher
   help              Show this help
@@ -91,6 +93,8 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return err
 		}
 		return a.initialize(ctx, directory, false)
+	case args[0] == "install":
+		return a.install(ctx, args[1:])
 	case args[0] == "list":
 		jsonOutput, err := validateListArgs(args[1:])
 		if err != nil {
@@ -128,6 +132,125 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], helpText)
 	}
+}
+
+const installHelp = `Install and update shared runtimes
+
+Usage:
+  ldr install                         Choose a runtime and version interactively
+  ldr install <java|node|go> <version> Install or update one runtime family
+  ldr install <java|node> --lts        Install or update the five newest LTS families
+  ldr install go                       Choose a Go family (for example 1.26)
+  ldr install all                      Install latest Java, Node, and Go families
+  ldr install all --lts                Install five Java/Node LTS families plus latest Go
+
+Examples:
+  ldr install java 21
+  ldr install node 24
+  ldr install node --lts
+  ldr install go 1.26
+
+Runtimes are installed below the LDR user runtime store. Installation currently
+supports macOS arm64 and Intel Macs.
+`
+
+func (a App) install(ctx context.Context, args []string) error {
+	if len(args) == 1 && isHelp(args[0]) {
+		_, err := fmt.Fprint(a.out, installHelp)
+		return err
+	}
+	request, choose, err := parseInstallArgs(args)
+	if err != nil {
+		return err
+	}
+	if choose {
+		if !a.terminal {
+			return errors.New("usage: ldr install <java|node|go> <version> or `ldr install <java|node> --lts`")
+		}
+		request, err = promptInstall(a.in, a.out)
+		if err != nil {
+			return err
+		}
+	}
+	installed, err := runtimes.NewInstaller().Install(ctx, request)
+	if err != nil {
+		return err
+	}
+	for _, item := range installed {
+		fmt.Fprintf(a.out, "Installed %s %s (%s)\n%s\n", item.Runtime, item.Family, item.Version, item.Path)
+	}
+	return nil
+}
+
+func parseInstallArgs(args []string) (runtimes.InstallRequest, bool, error) {
+	if len(args) == 0 {
+		return runtimes.InstallRequest{}, true, nil
+	}
+	request := runtimes.InstallRequest{Runtime: strings.ToLower(args[0])}
+	if request.Runtime == "all" {
+		request.All = true
+		request.Runtime = ""
+	}
+	if request.Runtime != "" && request.Runtime != "java" && request.Runtime != "node" && request.Runtime != "go" && request.Runtime != "golang" {
+		return runtimes.InstallRequest{}, false, fmt.Errorf("unsupported runtime %q; choose java, node, go, or all", args[0])
+	}
+	for _, argument := range args[1:] {
+		switch argument {
+		case "--lts":
+			request.LTS = true
+		case "--all":
+			if request.Runtime != "" {
+				return runtimes.InstallRequest{}, false, errors.New("--all cannot be combined with a named runtime")
+			}
+			request.All = true
+		default:
+			if request.Version != "" || strings.HasPrefix(argument, "-") {
+				return runtimes.InstallRequest{}, false, errors.New("usage: ldr install <java|node|go> <version> [--lts]")
+			}
+			request.Version = argument
+		}
+	}
+	if request.All && request.Version != "" {
+		return runtimes.InstallRequest{}, false, errors.New("an all-runtime install does not accept a version")
+	}
+	if request.Runtime == "" && !request.All {
+		return runtimes.InstallRequest{}, false, errors.New("usage: ldr install all [--lts]")
+	}
+	if request.Runtime != "" && request.Version == "" && !request.LTS {
+		return request, true, nil
+	}
+	return request, false, nil
+}
+
+func promptInstall(in io.Reader, out io.Writer) (runtimes.InstallRequest, error) {
+	fmt.Fprint(out, "Runtime [java/node/go/all]: ")
+	var runtimeName string
+	if _, err := fmt.Fscan(in, &runtimeName); err != nil {
+		return runtimes.InstallRequest{}, err
+	}
+	if strings.EqualFold(runtimeName, "all") {
+		fmt.Fprint(out, "Mode [latest/lts]: ")
+		var mode string
+		if _, err := fmt.Fscan(in, &mode); err != nil {
+			return runtimes.InstallRequest{}, err
+		}
+		if !strings.EqualFold(mode, "latest") && !strings.EqualFold(mode, "lts") {
+			return runtimes.InstallRequest{}, errors.New("mode must be latest or lts")
+		}
+		return runtimes.InstallRequest{All: true, LTS: strings.EqualFold(mode, "lts")}, nil
+	}
+	fmt.Fprint(out, "Version [latest/lts/major or Go family]: ")
+	var version string
+	if _, err := fmt.Fscan(in, &version); err != nil {
+		return runtimes.InstallRequest{}, err
+	}
+	if strings.EqualFold(version, "lts") {
+		return runtimes.InstallRequest{Runtime: strings.ToLower(runtimeName), LTS: true}, nil
+	}
+	if strings.EqualFold(version, "latest") {
+		return runtimes.InstallRequest{Runtime: strings.ToLower(runtimeName)}, nil
+	}
+	return runtimes.InstallRequest{Runtime: strings.ToLower(runtimeName), Version: version}, nil
 }
 
 func (a App) launchTUI(ctx context.Context, directory string) error {

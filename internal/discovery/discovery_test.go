@@ -3,6 +3,7 @@ package discovery
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/swsw1005/local-dev-launcher/internal/state"
@@ -69,6 +70,32 @@ BUILD SUCCESSFUL in 1s
 	}
 	if !local {
 		t.Fatalf("root custom task was not parsed: %#v", tasks)
+	}
+}
+
+func TestParseNodeScriptsUsesToolReportedJSON(t *testing.T) {
+	scripts := parseNodeScripts([]byte(`{"scripts":{"dev":"vite","integration":"playwright test"}}`))
+	if got, want := strings.Join(scripts, ","), "dev,integration"; got != want {
+		t.Fatalf("scripts = %q, want %q", got, want)
+	}
+}
+
+func TestParseMavenEffectivePOMIncludesPluginGoals(t *testing.T) {
+	output := []byte(`Maven output
+<?xml version="1.0"?>
+<project><artifactId>service</artifactId><build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId><executions><execution><goals><goal>repackage</goal></goals></execution></executions></plugin></plugins></build></project>`)
+	tasks, err := parseMavenEffectivePOM(output, "/workspace/example", ".", "./mvnw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+	if got, want := tasks[0].Name, "spring-boot:repackage"; got != want {
+		t.Fatalf("name = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tasks[0].Args, " "), "org.springframework.boot:spring-boot-maven-plugin:repackage"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
 	}
 }
 
