@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -103,6 +104,7 @@ type archiveRelease struct {
 type nodeRelease struct {
 	Version string          `json:"version"`
 	LTS     json.RawMessage `json:"lts"`
+	Files   []string        `json:"files"`
 }
 
 func (i Installer) installNode(ctx context.Context, store string, request InstallRequest) ([]InstalledRuntime, error) {
@@ -124,6 +126,16 @@ func (i Installer) installNode(ctx context.Context, store string, request Instal
 		}
 		if request.LTS && string(release.LTS) == "false" {
 			continue
+		}
+		archiveName := "osx-arm64-tar"
+		if i.GOARCH == "amd64" {
+			archiveName = "osx-x64-tar"
+		}
+		if !containsString(release.Files, archiveName) {
+			if request.LTS {
+				continue
+			}
+			return nil, fmt.Errorf("Node %d has no macOS %s archive", major, i.GOARCH)
 		}
 		selected[major] = release
 		if request.Version != "" || (!request.LTS && request.Version == "") {
@@ -152,6 +164,9 @@ func (i Installer) installNode(ctx context.Context, store string, request Instal
 		}
 		item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "node", Family: strconv.Itoa(major), Version: release.Version, URL: base + file, SHA256: checksum, Home: "bin/node"})
 		if err != nil {
+			return installed, err
+		}
+		if err := installPnpm(ctx, item.Path); err != nil {
 			return installed, err
 		}
 		installed = append(installed, item)
@@ -210,9 +225,15 @@ func (i Installer) installJava(ctx context.Context, store string, request Instal
 		endpoint := fmt.Sprintf("https://api.adoptium.net/v3/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=mac&vendor=eclipse", major, arch)
 		var assets []adoptiumAsset
 		if err := i.getJSON(ctx, endpoint, &assets); err != nil {
+			if request.LTS {
+				continue
+			}
 			return installed, fmt.Errorf("get Java %d: %w", major, err)
 		}
 		if len(assets) == 0 || assets[0].Binary.Package.Link == "" || assets[0].Binary.Package.Checksum == "" {
+			if request.LTS {
+				continue
+			}
 			return installed, fmt.Errorf("Java %d has no macOS %s archive", major, arch)
 		}
 		item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "java", Family: strconv.Itoa(major), Version: strconv.Itoa(major), URL: assets[0].Binary.Package.Link, SHA256: assets[0].Binary.Package.Checksum, Home: "Contents/Home/bin/java"})
@@ -222,6 +243,22 @@ func (i Installer) installJava(ctx context.Context, store string, request Instal
 		installed = append(installed, item)
 	}
 	return installed, nil
+}
+
+func installPnpm(ctx context.Context, nodeHome string) error {
+	npm := filepath.Join(nodeHome, "bin", "npm")
+	if _, err := os.Stat(npm); err != nil {
+		return fmt.Errorf("Node package manager is unavailable at %s: %w", npm, err)
+	}
+	process := exec.CommandContext(ctx, npm, "install", "--global", "--prefix", nodeHome, "pnpm")
+	process.Env = append(os.Environ(), "PATH="+filepath.Join(nodeHome, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if output, err := process.CombinedOutput(); err != nil {
+		return fmt.Errorf("install pnpm: %w\n%s", err, strings.TrimSpace(string(output)))
+	}
+	if _, err := os.Stat(filepath.Join(nodeHome, "bin", "pnpm")); err != nil {
+		return fmt.Errorf("pnpm installation did not create an executable: %w", err)
+	}
+	return nil
 }
 
 type goRelease struct {
@@ -532,4 +569,13 @@ func sortedIntKeys[T any](values map[int]T) []int {
 	}
 	sort.Ints(keys)
 	return keys
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

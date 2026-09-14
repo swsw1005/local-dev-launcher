@@ -60,3 +60,32 @@ func TestResolveNodeMajorDefaultsToNode24(t *testing.T) {
 		t.Fatalf("major = %d, want 24", major)
 	}
 }
+
+func TestResolvePnpmUsesInstalledRuntimePnpm(t *testing.T) {
+	root := t.TempDir()
+	store := filepath.Join(root, "runtimes")
+	bin := filepath.Join(store, "node", "24", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"node", "pnpm"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"engines":{"node":"24"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(overrideKey, store)
+
+	resolution, err := ResolveTask(root, domain.Task{Adapter: "node", Command: "pnpm", Args: []string{"build"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(bin, "pnpm"); resolution.Task.Command != want {
+		t.Fatalf("command = %q, want %q", resolution.Task.Command, want)
+	}
+	if got, want := strings.Join(resolution.Task.Args, " "), "build"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
