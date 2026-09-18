@@ -118,6 +118,9 @@ func TestRuntimeHelp(t *testing.T) {
 	if !strings.Contains(out.String(), "runtime use") {
 		t.Fatalf("help = %q", out.String())
 	}
+	if !strings.Contains(out.String(), "runtime search") {
+		t.Fatalf("runtime search help = %q", out.String())
+	}
 }
 
 func TestInitShellHelp(t *testing.T) {
