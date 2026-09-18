@@ -99,6 +99,14 @@ func TestParseInstallArgs(t *testing.T) {
 	if err != nil || !choose {
 		t.Fatalf("Go without a family should prompt: choose=%v, err=%v", choose, err)
 	}
+	request, choose, err = parseInstallArgs([]string{"go", "latest"})
+	if err != nil || choose || request.Version != "" || request.Runtime != "go" {
+		t.Fatalf("Go latest request = %#v, choose=%v, err=%v", request, choose, err)
+	}
+	request, choose, err = parseInstallArgs([]string{"go", "1.26.3"})
+	if err != nil || choose || request.Version != "1.26.3" {
+		t.Fatalf("Go exact request = %#v, choose=%v, err=%v", request, choose, err)
+	}
 }
 
 func TestRuntimeHelp(t *testing.T) {

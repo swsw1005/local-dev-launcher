@@ -44,6 +44,13 @@ type InstalledRuntime struct {
 	Path    string
 }
 
+// AvailableVersion describes a release that can be selected for installation.
+type AvailableVersion struct {
+	Runtime string
+	Version string
+	LTS     bool
+}
+
 // Installer obtains release metadata and archives only from the runtime
 // vendors' HTTPS endpoints. Client can be replaced in tests.
 type Installer struct {
@@ -105,6 +112,87 @@ type nodeRelease struct {
 	Version string          `json:"version"`
 	LTS     json.RawMessage `json:"lts"`
 	Files   []string        `json:"files"`
+}
+
+// AvailableVersions returns stable/selectable releases for a runtime, newest
+// first. The query is matched against the displayed version.
+func (i Installer) AvailableVersions(ctx context.Context, runtimeName, query string) ([]AvailableVersion, error) {
+	query = strings.TrimSpace(strings.ToLower(strings.TrimPrefix(query, "v")))
+	switch runtimeName {
+	case "java":
+		var available adoptiumReleases
+		if err := i.getJSON(ctx, adoptiumReleasesURL, &available); err != nil {
+			return nil, fmt.Errorf("get Java releases: %w", err)
+		}
+		lts := make(map[int]bool, len(available.AvailableLTSReleases))
+		for _, major := range available.AvailableLTSReleases {
+			lts[major] = true
+		}
+		versions := make([]AvailableVersion, 0, len(available.AvailableReleases))
+		for _, major := range available.AvailableReleases {
+			version := strconv.Itoa(major)
+			if query != "" && !strings.Contains(version, query) {
+				continue
+			}
+			versions = append(versions, AvailableVersion{Runtime: "java", Version: version, LTS: lts[major]})
+		}
+		sort.Slice(versions, func(a, b int) bool {
+			left, _ := strconv.Atoi(versions[a].Version)
+			right, _ := strconv.Atoi(versions[b].Version)
+			return left > right
+		})
+		return versions, nil
+	case "node":
+		var releases []nodeRelease
+		if err := i.getJSON(ctx, nodeIndexURL, &releases); err != nil {
+			return nil, fmt.Errorf("get Node releases: %w", err)
+		}
+		versions := make([]AvailableVersion, 0, len(releases))
+		seen := map[string]bool{}
+		for _, release := range releases {
+			version := strings.TrimPrefix(release.Version, "v")
+			if !isStableNodeVersion(version) || seen[version] || (query != "" && !strings.Contains(strings.ToLower(version), query)) {
+				continue
+			}
+			seen[version] = true
+			versions = append(versions, AvailableVersion{Runtime: "node", Version: version, LTS: isNodeLTS(release.LTS)})
+		}
+		sort.SliceStable(versions, func(a, b int) bool { return nodeVersionLess(versions[b].Version, versions[a].Version) })
+		return versions, nil
+	default:
+		return nil, fmt.Errorf("unsupported runtime %q; choose java or node", runtimeName)
+	}
+}
+
+func isNodeLTS(value json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(value))
+	return trimmed != "" && trimmed != "false" && trimmed != "null"
+}
+
+func isStableNodeVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if _, err := strconv.Atoi(part); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func nodeVersionLess(left, right string) bool {
+	leftParts := strings.Split(left, ".")
+	rightParts := strings.Split(right, ".")
+	for index := range leftParts {
+		leftNumber, _ := strconv.Atoi(leftParts[index])
+		rightNumber, _ := strconv.Atoi(rightParts[index])
+		if leftNumber != rightNumber {
+			return leftNumber < rightNumber
+		}
+	}
+	return false
 }
 
 func (i Installer) installNode(ctx context.Context, store string, request InstallRequest) ([]InstalledRuntime, error) {
@@ -277,13 +365,24 @@ func (i Installer) installGo(ctx context.Context, store string, request InstallR
 	if request.LTS {
 		return nil, errors.New("Go has no LTS release line; use `ldr install go` or `ldr install go 1.26`")
 	}
-	var releases []goRelease
-	if err := i.getJSON(ctx, goDownloadsURL, &releases); err != nil {
-		return nil, fmt.Errorf("get Go releases: %w", err)
+	if strings.EqualFold(request.Version, "latest") {
+		request.Version = ""
+	}
+	releases, err := i.goReleases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var requested *GoVersion
+	if request.Version != "" {
+		version, err := ParseGoVersion(request.Version)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Go version %q: %w", request.Version, err)
+		}
+		requested = &version
 	}
 	for _, release := range releases {
 		version, err := ParseGoVersion(release.Version)
-		if err != nil || !release.Stable || (request.Version != "" && version.Family() != strings.TrimPrefix(request.Version, "go")) {
+		if err != nil || (requested != nil && (version.Family() != requested.Family() || (requested.HasPatch && version.String() != requested.String()))) {
 			continue
 		}
 		for _, file := range release.Files {
@@ -298,6 +397,59 @@ func (i Installer) installGo(ctx context.Context, store string, request InstallR
 		}
 	}
 	return nil, fmt.Errorf("no stable Go release matches %q", request.Version)
+}
+
+// AvailableGoVersions returns stable Go releases, newest first. A query may
+// be a family (1.26), an exact version (1.26.3), or any text contained in the
+// normalized version string.
+func (i Installer) AvailableGoVersions(ctx context.Context, query string) ([]GoVersion, error) {
+	releases, err := i.goReleases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(query)), "go")
+	versions := make([]GoVersion, 0, len(releases))
+	for _, release := range releases {
+		version, err := ParseGoVersion(release.Version)
+		if err != nil || (query != "" && !strings.Contains(version.String(), query)) {
+			continue
+		}
+		versions = append(versions, version)
+	}
+	return versions, nil
+}
+
+func (i Installer) goReleases(ctx context.Context) ([]goRelease, error) {
+	var releases []goRelease
+	if err := i.getJSON(ctx, goDownloadsURL, &releases); err != nil {
+		return nil, fmt.Errorf("get Go releases: %w", err)
+	}
+	stable := releases[:0]
+	for _, release := range releases {
+		if !release.Stable {
+			continue
+		}
+		if _, err := ParseGoVersion(release.Version); err != nil {
+			continue
+		}
+		stable = append(stable, release)
+	}
+	sort.SliceStable(stable, func(a, b int) bool {
+		left, _ := ParseGoVersion(stable[a].Version)
+		right, _ := ParseGoVersion(stable[b].Version)
+		return goVersionLess(right, left)
+	})
+	return stable, nil
+}
+
+func goVersionLess(left, right GoVersion) bool {
+	if left.Major != right.Major {
+		return left.Major < right.Major
+	}
+	if left.Minor != right.Minor {
+		return left.Minor < right.Minor
+	}
+	return left.Patch < right.Patch
 }
 
 func (i Installer) installArchive(ctx context.Context, store string, release archiveRelease) (InstalledRuntime, error) {

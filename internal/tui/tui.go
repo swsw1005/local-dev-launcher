@@ -167,6 +167,9 @@ func (m model) entries() []list.Item {
 		if current.adapter == "gradle" {
 			return gradleEntries(localTasks)
 		}
+		if current.adapter == "maven" {
+			return favoriteTaskEntries(localTasks)
+		}
 		return taskEntries(localTasks)
 	}
 
@@ -210,6 +213,8 @@ func (m model) entries() []list.Item {
 		}
 	} else if len(localTasks) > 0 && localTasks[0].Adapter == "gradle" {
 		entries = append(entries, gradleEntries(localTasks)...)
+	} else if len(localTasks) > 0 && localTasks[0].Adapter == "maven" {
+		entries = append(entries, favoriteTaskEntries(localTasks)...)
 	} else {
 		entries = append(entries, taskEntries(localTasks)...)
 	}
@@ -269,11 +274,34 @@ func gradleEntries(tasks []domain.Task) []list.Item {
 }
 
 func favoriteOrder(task domain.Task) string {
-	priority := map[string]string{"bootRun": "0", "build": "1", "clean": "2", "test": "3"}
+	priority := map[string]string{"spring-boot:run": "0", "spring-boot:run (local)": "1", "bootRun": "2", "build": "3", "clean": "4", "test": "5"}
 	if value, exists := priority[task.Name]; exists {
 		return value
 	}
 	return "9" + task.Name
+}
+
+func favoriteTaskEntries(tasks []domain.Task) []list.Item {
+	favorites := make([]domain.Task, 0, len(tasks))
+	others := make([]domain.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Favorite {
+			favorites = append(favorites, task)
+		} else {
+			others = append(others, task)
+		}
+	}
+	sort.SliceStable(favorites, func(i, j int) bool { return favoriteOrder(favorites[i]) < favoriteOrder(favorites[j]) })
+	sort.SliceStable(others, func(i, j int) bool { return others[i].Name < others[j].Name })
+	items := make([]list.Item, 0, len(tasks))
+	for _, task := range append(favorites, others...) {
+		label := task.Name
+		if task.Favorite {
+			label = "★ " + label
+		}
+		items = append(items, browserEntry{id: "task:" + task.ID, kind: taskEntry, label: label, description: commandDescription(task), task: &task})
+	}
+	return items
 }
 
 func gradleGroups(tasks []domain.Task) []string {
