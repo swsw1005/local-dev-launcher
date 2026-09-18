@@ -88,14 +88,20 @@ func TestParseMavenEffectivePOMIncludesPluginGoals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 {
+	if len(tasks) != 3 {
 		t.Fatalf("tasks = %#v", tasks)
 	}
 	if got, want := tasks[0].Name, "spring-boot:repackage"; got != want {
-		t.Fatalf("name = %q, want %q", got, want)
+		t.Fatalf("repackage name = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(tasks[0].Args, " "), "org.springframework.boot:spring-boot-maven-plugin:repackage"; got != want {
 		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if got, want := tasks[1].Name, "spring-boot:run"; got != want || !tasks[1].Favorite {
+		t.Fatalf("run task = %#v, want favorite %q", tasks[1], want)
+	}
+	if got, want := tasks[2].Name, "spring-boot:run (local)"; got != want || !tasks[2].Favorite || strings.Join(tasks[2].Args, " ") != "-Dspring-boot.run.profiles=local org.springframework.boot:spring-boot-maven-plugin:run" {
+		t.Fatalf("local task = %#v", tasks[2])
 	}
 }
 

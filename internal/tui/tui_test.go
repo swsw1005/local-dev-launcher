@@ -47,6 +47,23 @@ func TestGradleModuleShowsFavoritesThenTaskCategories(t *testing.T) {
 	}
 }
 
+func TestMavenModuleShowsSpringBootFavoritesFirst(t *testing.T) {
+	tasks := []domain.Task{
+		{ID: "maven.api.test", Name: "test", Adapter: "maven", ModulePath: "api", Command: "./mvnw", Args: []string{"test"}},
+		{ID: "maven.api.spring-boot.run.local", Name: "spring-boot:run (local)", Favorite: true, Adapter: "maven", ModulePath: "api", Command: "./mvnw", Args: []string{"-Dspring-boot.run.profiles=local", "spring-boot:run"}},
+		{ID: "maven.api.spring-boot.run", Name: "spring-boot:run", Favorite: true, Adapter: "maven", ModulePath: "api", Command: "./mvnw", Args: []string{"spring-boot:run"}},
+	}
+	m := newModel(tasks)
+	m.stack = append(m.stack, location{modulePath: "api", adapter: "maven"})
+	items := m.entries()
+	if got := items[0].(browserEntry).label; got != "★ spring-boot:run" {
+		t.Fatalf("first Maven task = %q", got)
+	}
+	if got := items[1].(browserEntry).label; got != "★ spring-boot:run (local)" {
+		t.Fatalf("second Maven task = %q", got)
+	}
+}
+
 func TestBackRestoresTheItemThatOpenedTheCurrentPane(t *testing.T) {
 	tasks := []domain.Task{
 		{ID: "gradle.api.clean", Name: "clean", Adapter: "gradle", ModulePath: "homeops-admin-api", Command: "./gradlew"},

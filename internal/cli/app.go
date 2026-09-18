@@ -25,7 +25,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.5.0"
+const Version = "0.6.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -156,6 +156,11 @@ Usage:
   ldr install <java|node|go> <version> Install or update one runtime family
   ldr install <java|node> --lts        Install or update the five newest LTS families
   ldr install go                       Choose a Go family (for example 1.26)
+  ldr install go latest                Install the newest stable Go release
+  ldr install go <version>             Install a Go family or exact release
+  ldr install java --list [query]      Search available Java releases
+  ldr install node --list [query]      Search available Node releases
+  ldr install go --list [query]        Search available stable Go releases
   ldr install all                      Install latest Java, Node, and Go families
   ldr install all --lts                Install five Java/Node LTS families plus latest Go
 
@@ -164,6 +169,7 @@ Examples:
   ldr install node 24
   ldr install node --lts
   ldr install go 1.26
+  ldr install go --list 1.26
 
 Runtimes are installed below the LDR user runtime store. Installation currently
 supports macOS arm64 and Intel Macs.
@@ -173,6 +179,16 @@ func (a App) install(ctx context.Context, args []string) error {
 	if len(args) == 1 && isHelp(args[0]) {
 		_, err := fmt.Fprint(a.out, installHelp)
 		return err
+	}
+	if len(args) >= 2 && (strings.EqualFold(args[0], "java") || strings.EqualFold(args[0], "node") || strings.EqualFold(args[0], "go") || strings.EqualFold(args[0], "golang")) && (args[1] == "--list" || args[1] == "--search") {
+		if len(args) > 3 {
+			return errors.New("usage: ldr install go --list [query]")
+		}
+		query := ""
+		if len(args) == 3 {
+			query = args[2]
+		}
+		return a.listRuntimeVersions(ctx, strings.ToLower(args[0]), query)
 	}
 	request, choose, err := parseInstallArgs(args)
 	if err != nil {
@@ -206,6 +222,42 @@ func (a App) install(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Fprintf(a.out, "Activated %s %s for this shell via %s\n", activation.Runtime, activation.Family, strings.Join(activation.Links, ", "))
+	}
+	return nil
+}
+
+func (a App) listRuntimeVersions(ctx context.Context, runtimeName, query string) error {
+	if runtimeName == "golang" {
+		runtimeName = "go"
+	}
+	if runtimeName == "go" {
+		versions, err := runtimes.NewInstaller().AvailableGoVersions(ctx, query)
+		if err != nil {
+			return err
+		}
+		if len(versions) == 0 {
+			return fmt.Errorf("no stable Go releases match %q", query)
+		}
+		fmt.Fprintln(a.out, "RUNTIME\tVERSION\tLTS")
+		for _, version := range versions {
+			fmt.Fprintf(a.out, "go\t%s\t-\n", version)
+		}
+		return nil
+	}
+	versions, err := runtimes.NewInstaller().AvailableVersions(ctx, runtimeName, query)
+	if err != nil {
+		return err
+	}
+	if len(versions) == 0 {
+		return fmt.Errorf("no %s releases match %q", runtimeName, query)
+	}
+	fmt.Fprintln(a.out, "RUNTIME\tVERSION\tLTS")
+	for _, version := range versions {
+		lts := ""
+		if version.LTS {
+			lts = "*"
+		}
+		fmt.Fprintf(a.out, "%s\t%s\t%s\n", version.Runtime, version.Version, lts)
 	}
 	return nil
 }
@@ -301,6 +353,7 @@ func parseInstallArgs(args []string) (runtimes.InstallRequest, bool, error) {
 		return runtimes.InstallRequest{}, true, nil
 	}
 	request := runtimes.InstallRequest{Runtime: strings.ToLower(args[0])}
+	explicitLatest := false
 	if request.Runtime == "all" {
 		request.All = true
 		request.Runtime = ""
@@ -312,6 +365,11 @@ func parseInstallArgs(args []string) (runtimes.InstallRequest, bool, error) {
 		switch argument {
 		case "--lts":
 			request.LTS = true
+		case "--latest":
+			if request.Version != "" || request.LTS {
+				return runtimes.InstallRequest{}, false, errors.New("--latest cannot be combined with a version or --lts")
+			}
+			explicitLatest = true
 		case "--all":
 			if request.Runtime != "" {
 				return runtimes.InstallRequest{}, false, errors.New("--all cannot be combined with a named runtime")
@@ -321,7 +379,11 @@ func parseInstallArgs(args []string) (runtimes.InstallRequest, bool, error) {
 			if request.Version != "" || strings.HasPrefix(argument, "-") {
 				return runtimes.InstallRequest{}, false, errors.New("usage: ldr install <java|node|go> <version> [--lts]")
 			}
-			request.Version = argument
+			if strings.EqualFold(argument, "latest") {
+				explicitLatest = true
+			} else {
+				request.Version = argument
+			}
 		}
 	}
 	if request.All && request.Version != "" {
@@ -329,6 +391,12 @@ func parseInstallArgs(args []string) (runtimes.InstallRequest, bool, error) {
 	}
 	if request.Runtime == "" && !request.All {
 		return runtimes.InstallRequest{}, false, errors.New("usage: ldr install all [--lts]")
+	}
+	if explicitLatest {
+		if request.LTS {
+			return runtimes.InstallRequest{}, false, errors.New("latest cannot be combined with --lts")
+		}
+		return request, false, nil
 	}
 	if request.Runtime != "" && request.Version == "" && !request.LTS {
 		return request, true, nil

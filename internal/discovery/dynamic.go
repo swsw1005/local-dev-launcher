@@ -75,9 +75,6 @@ func parseNodeScripts(output []byte) []string {
 // expose a Gradle-style universal task listing, so configured plugin goals are
 // the meaningful dynamically discovered commands.
 func discoverMavenTaskReport(root string, _ []domain.Task) ([]domain.Task, error) {
-	if !exists(filepath.Join(root, "mvnw")) && !exists(filepath.Join(root, "mvnw.cmd")) {
-		return nil, nil
-	}
 	var pomPaths []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -98,8 +95,10 @@ func discoverMavenTaskReport(root string, _ []domain.Task) ([]domain.Task, error
 		return nil, err
 	}
 	command := "./mvnw"
-	if !exists(filepath.Join(root, "mvnw")) {
+	if !exists(filepath.Join(root, "mvnw")) && exists(filepath.Join(root, "mvnw.cmd")) {
 		command = "mvnw.cmd"
+	} else if !exists(filepath.Join(root, "mvnw")) {
+		command = "mvn"
 	}
 	var tasks []domain.Task
 	for _, pomPath := range pomPaths {
@@ -182,7 +181,34 @@ func parseMavenEffectivePOM(output []byte, root, relative, command string) ([]do
 			}
 		}
 	}
+	if hasSpringBootPlugin(pom.Build.Plugins) {
+		tasks = append(tasks, springBootTasks(module, modulePath, command)...)
+	}
 	return tasks, nil
+}
+
+func hasSpringBootPlugin(plugins []effectivePlugin) bool {
+	for _, plugin := range plugins {
+		if plugin.ArtifactID == "spring-boot-maven-plugin" && (plugin.GroupID == "" || plugin.GroupID == "org.springframework.boot") {
+			return true
+		}
+	}
+	return false
+}
+
+func springBootTasks(module, modulePath, command string) []domain.Task {
+	baseArgs := func(extra ...string) []string {
+		args := append([]string{}, extra...)
+		if modulePath != "." {
+			args = append([]string{"-pl", modulePath}, args...)
+		}
+		return args
+	}
+	const invocation = "org.springframework.boot:spring-boot-maven-plugin:run"
+	return []domain.Task{
+		{ID: "maven." + module + ".spring-boot.run", Name: "spring-boot:run", Group: "Spring Boot", Favorite: true, Adapter: "maven", Module: module, ModulePath: modulePath, WorkingDir: ".", Command: command, Args: baseArgs(invocation)},
+		{ID: "maven." + module + ".spring-boot.run.local", Name: "spring-boot:run (local)", Group: "Spring Boot", Favorite: true, Adapter: "maven", Module: module, ModulePath: modulePath, WorkingDir: ".", Command: command, Args: baseArgs("-Dspring-boot.run.profiles=local", invocation)},
+	}
 }
 
 func runTaskReport(root string, task domain.Task, environment map[string]string) ([]byte, error) {

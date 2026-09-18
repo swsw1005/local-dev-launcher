@@ -304,6 +304,9 @@ func nodeCommand(root, directory, packageManager string) string {
 
 type pomFile struct {
 	ArtifactID string `xml:"artifactId"`
+	Build      struct {
+		Plugins []effectivePlugin `xml:"plugins>plugin"`
+	} `xml:"build"`
 }
 
 func discoverMavenModule(root, directory, pomPath string) ([]domain.Task, error) {
@@ -335,6 +338,9 @@ func discoverMavenModule(root, directory, pomPath string) ([]domain.Task, error)
 			args = []string{"-pl", filepath.ToSlash(relative), name}
 		}
 		tasks = append(tasks, domain.Task{ID: "maven." + module + "." + name, Name: name, Adapter: "maven", Module: module, ModulePath: relative, WorkingDir: ".", Command: command, Args: args})
+	}
+	if hasSpringBootPlugin(pom.Build.Plugins) {
+		tasks = append(tasks, springBootTasks(module, relative, command)...)
 	}
 	return tasks, nil
 }
