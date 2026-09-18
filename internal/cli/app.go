@@ -42,7 +42,7 @@ Commands:
   stop <process-id> Stop a managed process
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
-  runtime ...       List installed runtimes or activate one for the shell
+  runtime ...       Search, list, or activate managed runtimes
   init-shell        Configure shared Bash/Zsh PATH and optional banner support
   profile ...       Create and inspect user execution profiles
   tui               Open the interactive task launcher
@@ -98,9 +98,9 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 	case args[0] == "install":
 		return a.install(ctx, args[1:])
 	case args[0] == "runtime":
-		return a.runtime(args[1:])
+		return a.runtime(ctx, args[1:])
 	case args[0] == "use":
-		return a.runtime(append([]string{"use"}, args[1:]...))
+		return a.runtime(ctx, append([]string{"use"}, args[1:]...))
 	case args[0] == "init-shell":
 		if len(args) == 2 && isHelp(args[1]) {
 			_, err := fmt.Fprint(a.out, initShellHelp)
@@ -160,7 +160,7 @@ Usage:
   ldr install go <version>             Install a Go family or exact release
   ldr install java --list [query]      Search available Java releases
   ldr install node --list [query]      Search available Node releases
-  ldr install go --list [query]        Search available stable Go releases
+  ldr install go --list [query]        Legacy alias for runtime search go
   ldr install all                      Install latest Java, Node, and Go families
   ldr install all --lts                Install five Java/Node LTS families plus latest Go
 
@@ -266,6 +266,8 @@ const runtimeHelp = `Manage shell-active runtimes
 
 Usage:
   ldr runtime list              List installed Java, Node, and Go families
+  ldr runtime search <runtime> [query]
+                                Search available Java, Node, or Go releases
   ldr runtime use <runtime> <version>
                                 Activate one installed family via ~/bin links
   ldr runtime remove <runtime> <version>
@@ -274,6 +276,10 @@ Usage:
 
 Examples:
   ldr runtime list
+  ldr runtime search go
+  ldr runtime search go 1.27
+  ldr runtime search java 21
+  ldr runtime search node 24
   ldr runtime use java 21
   ldr runtime remove node 20
   ldr use node 24
@@ -282,7 +288,7 @@ LDR updates only symlinks in ~/bin for the selected runtime. Ensure ~/bin is
 on PATH (it is already present in this environment).
 `
 
-func (a App) runtime(args []string) error {
+func (a App) runtime(ctx context.Context, args []string) error {
 	if len(args) == 0 || (len(args) == 1 && args[0] == "list") {
 		installed, err := runtimes.ListInstalled()
 		if err != nil {
@@ -306,6 +312,16 @@ func (a App) runtime(args []string) error {
 		_, err := fmt.Fprint(a.out, runtimeHelp)
 		return err
 	}
+	if len(args) >= 2 && (args[0] == "search" || args[0] == "available") {
+		if len(args) > 3 || (args[1] != "java" && args[1] != "node" && args[1] != "go" && args[1] != "golang") {
+			return errors.New("usage: ldr runtime search <java|node|go> [query]")
+		}
+		query := ""
+		if len(args) == 3 {
+			query = args[2]
+		}
+		return a.listRuntimeVersions(ctx, args[1], query)
+	}
 	if len(args) == 3 && args[0] == "remove" {
 		if err := runtimes.Remove(args[1], args[2]); err != nil {
 			return err
@@ -314,7 +330,7 @@ func (a App) runtime(args []string) error {
 		return nil
 	}
 	if len(args) != 3 || args[0] != "use" {
-		return errors.New("usage: ldr runtime <list|use|remove> [java|node|go] [version]")
+		return errors.New("usage: ldr runtime <list|search|use|remove> [java|node|go] [version-or-query]")
 	}
 	activation, err := runtimes.Activate(args[1], args[2])
 	if err != nil {
