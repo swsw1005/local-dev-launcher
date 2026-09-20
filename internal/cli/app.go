@@ -27,7 +27,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.6.0"
+const Version = "0.7.0"
 
 const helpText = `Local Dev Runner (LDR)
 
