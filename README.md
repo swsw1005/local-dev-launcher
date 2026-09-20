@@ -1,4 +1,4 @@
-# Local Dev Runner (LDR)
+# Local Dev Runner (LDR) 0.7.0
 
 Local Dev Runner is a terminal-first local development runner. It is designed
 to discover project tasks and provide one execution model for developers,
@@ -10,13 +10,19 @@ Discover → Resolve → Run → Manage
 
 ## Status
 
-The MVP CLI core currently provides:
+The 0.7.0 CLI provides:
 
 - `ldr init` to create isolated project-local state
 - Git ignore detection and a clear warning for unignored `.ldr/` directories
 - normalized task registry and SHA-256 discovery cache
 - direct structured task execution with streamed output and exit-code propagation
 - user profiles with environment and argument overrides
+- profile `.env` files, variable interpolation, and masked display
+- fuzzy task search, aliases, and recent-task history
+- `ldr doctor` diagnostics and machine-readable process/task output
+- explicit orphan-process discovery and cleanup
+- optional `.ldr/project.toml` discovery configuration
+- Cargo, Makefile, and Docker Compose task discovery
 - user-level runtime-store paths
 - Go runtime requirement parsing and resolution (`go.mod` / `go.work`)
 
@@ -54,8 +60,8 @@ then extract and install it:
 
 ```bash
 # Apple Silicon (M1/M2/M3/M4)
-gh release download v0.1.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.1.0_darwin_arm64.tar.gz'
-tar -xzf ldr_0.1.0_darwin_arm64.tar.gz
+gh release download v0.7.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.7.0_darwin_arm64.tar.gz'
+tar -xzf ldr_0.7.0_darwin_arm64.tar.gz
 install -m 0755 ldr "$HOME/bin/ldr"
 ```
 
@@ -85,6 +91,8 @@ ldr
 ldr init
 ldr list
 ldr list --json
+ldr list --search boot --json
+ldr list --recent
 ldr refresh
 ldr run gradle.homeops-agent-api.bootRun
 ldr start gradle.homeops-agent-api.bootRun
@@ -150,8 +158,15 @@ For long-running tasks, use the process manager:
 ```bash
 ldr start gradle.homeops-agent-api.bootRun
 ldr ps
+ldr ps --json
 ldr logs <process-id>
 ldr stop <process-id>
+ldr restart <process-id>
+ldr cleanup
+ldr cleanup --yes
+ldr doctor
+ldr doctor --json
+ldr alias api gradle.homeops-agent-api.bootRun
 ```
 
 LDR writes process metadata and logs only under `.ldr/state/`.
@@ -183,9 +198,28 @@ ldr run agent-api-local
 ```
 
 Profiles live in `.ldr/profiles/`, survive discovery refreshes, and extend the
-base task rather than duplicating its command. The initial TOML format supports
-`[env]` overrides plus `[args]` `prepend` and `append` arrays. A profile whose
-base task disappears remains on disk and is shown as `BROKEN`.
+base task rather than duplicating its command. Profile TOML supports
+`env_from = [".env.local"]`, `[env]` overrides, and `[args]` `prepend` and
+`append` arrays. Environment precedence is shell, env files in declaration
+order, then explicit profile values. `profile show` masks values. A profile
+whose base task disappears remains on disk and is shown as `BROKEN`.
+
+## Project Configuration
+
+Projects may define optional discovery settings in `.ldr/project.toml`:
+
+```toml
+version = 1
+default_profile = "backend-local"
+ignore = ["vendor", "generated"]
+
+[runtimes]
+java = "21"
+node = "24"
+```
+
+The file is optional; changes invalidate the discovery cache. LDR stores aliases
+and recent task IDs under `.ldr/state/`.
 
 ## Runtime store
 
@@ -222,17 +256,17 @@ Windows, but those operating systems have not yet been tested end-to-end.
 
 ```bash
 go test ./...
+gofmt -w ./cmd ./internal
 ```
 
-The project deliberately uses the Go standard library only at this stage.
+Cross-platform compile checks can be run with `CGO_ENABLED=0 GOOS=windows
+GOARCH=amd64 go test -c ./internal/cli`.
 
 ## Roadmap
 
-1. Core state, Git safety, and shared runtime model
-2. Gradle, Maven, Node, and Go discovery with cache invalidation
-3. Structured task execution
-4. User execution profiles
-5. TUI and process management
+1. Release packaging and distribution improvements
+2. More project-specific discovery adapters
+3. Expanded runtime and project configuration support
 
 See [local-dev-runner-initial-plan.md](local-dev-runner-initial-plan.md) for
 the full initial plan.
