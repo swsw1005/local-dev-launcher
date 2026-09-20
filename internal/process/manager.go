@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,12 +18,16 @@ import (
 )
 
 type Record struct {
-	ID        string    `json:"id"`
-	TaskID    string    `json:"taskId"`
-	PID       int       `json:"pid"`
-	StartedAt time.Time `json:"startedAt"`
-	LogPath   string    `json:"logPath"`
-	Status    string    `json:"status"`
+	ID         string     `json:"id"`
+	TaskID     string     `json:"taskId"`
+	PID        int        `json:"pid"`
+	PGID       int        `json:"pgid,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	ExitCode   *int       `json:"exitCode,omitempty"`
+	Signal     string     `json:"signal,omitempty"`
+	LogPath    string     `json:"logPath"`
+	Status     string     `json:"status"`
 }
 
 type Manager struct{ layout state.Layout }
@@ -48,21 +53,45 @@ func (m Manager) Start(ctx context.Context, task domain.Task, options execution.
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.Stdin = nil
+	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
 		logFile.Close()
 		return Record{}, fmt.Errorf("start %s: %w", task.ID, err)
 	}
 	if err := logFile.Close(); err != nil {
+		_ = terminateProcess(command.Process.Pid, processGroupID(command.Process.Pid), true)
 		return Record{}, err
 	}
-	record := Record{ID: id, TaskID: task.ID, PID: command.Process.Pid, StartedAt: time.Now().UTC(), LogPath: logPath, Status: "RUNNING"}
+	record := Record{ID: id, TaskID: task.ID, PID: command.Process.Pid, PGID: processGroupID(command.Process.Pid), StartedAt: time.Now().UTC(), LogPath: logPath, Status: "RUNNING"}
 	if err := m.save(append(m.List(), record)); err != nil {
+		_ = terminateProcess(record.PID, record.PGID, true)
 		return Record{}, err
 	}
-	if err := command.Process.Release(); err != nil {
-		return Record{}, err
-	}
+	go m.wait(command, record.ID)
 	return record, nil
+}
+
+func (m Manager) wait(command *exec.Cmd, id string) {
+	err := command.Wait()
+	records := m.List()
+	for index := range records {
+		if records[index].ID != id {
+			continue
+		}
+		finished := time.Now().UTC()
+		records[index].FinishedAt = &finished
+		if err == nil {
+			records[index].Status = "EXITED"
+		} else {
+			records[index].Status = "FAILED"
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code := exitErr.ExitCode()
+				records[index].ExitCode = &code
+			}
+		}
+		_ = m.save(records)
+		return
+	}
 }
 
 func (m Manager) List() []Record {
@@ -83,15 +112,24 @@ func (m Manager) Stop(id string) (Record, error) {
 		if records[index].ID != id {
 			continue
 		}
-		if records[index].Status != "RUNNING" {
+		if records[index].Status != "RUNNING" && records[index].Status != "STOPPING" {
 			return records[index], nil
 		}
-		process, err := os.FindProcess(records[index].PID)
-		if err != nil {
+		records[index].Status = "STOPPING"
+		if err := m.save(records); err != nil {
 			return Record{}, err
 		}
-		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := terminateProcess(records[index].PID, records[index].PGID, false); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return Record{}, err
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for processAlive(records[index].PID, records[index].PGID) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if processAlive(records[index].PID, records[index].PGID) {
+			if err := terminateProcess(records[index].PID, records[index].PGID, true); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				return Record{}, err
+			}
 		}
 		records[index].Status = "STOPPED"
 		if err := m.save(records); err != nil {
@@ -100,6 +138,13 @@ func (m Manager) Stop(id string) (Record, error) {
 		return records[index], nil
 	}
 	return Record{}, fmt.Errorf("process %q was not found", id)
+}
+
+func (m Manager) Restart(ctx context.Context, id string, task domain.Task, options execution.Options) (Record, error) {
+	if _, err := m.Stop(id); err != nil {
+		return Record{}, err
+	}
+	return m.Start(ctx, task, options)
 }
 
 func (m Manager) Logs(id string) ([]byte, error) {
