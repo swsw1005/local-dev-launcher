@@ -59,6 +59,7 @@ func (m Manager) Start(ctx context.Context, task domain.Task, options execution.
 		return Record{}, fmt.Errorf("start %s: %w", task.ID, err)
 	}
 	if err := logFile.Close(); err != nil {
+		_ = terminateProcess(command.Process.Pid, processGroupID(command.Process.Pid), true)
 		return Record{}, err
 	}
 	record := Record{ID: id, TaskID: task.ID, PID: command.Process.Pid, PGID: processGroupID(command.Process.Pid), StartedAt: time.Now().UTC(), LogPath: logPath, Status: "RUNNING"}

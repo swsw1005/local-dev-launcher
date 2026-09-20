@@ -3,6 +3,8 @@
 package process
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -19,9 +21,17 @@ func terminateProcess(pid, pgid int, force bool) error {
 		signal = syscall.SIGKILL
 	}
 	if pgid > 0 {
-		return syscall.Kill(-pgid, signal)
+		err := syscall.Kill(-pgid, signal)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
 	}
-	return syscall.Kill(pid, signal)
+	err := syscall.Kill(pid, signal)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
 }
 
 func processAlive(pid, pgid int) bool {
