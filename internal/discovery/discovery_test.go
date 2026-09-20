@@ -183,6 +183,26 @@ func TestDiscoverHonorsProjectIgnoreAndInvalidatesOnConfigChange(t *testing.T) {
 	}
 }
 
+func TestDiscoverAdditionalProjectAdapters(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "Cargo.toml", "[package]\nname = \"sample\"\n")
+	writeFixture(t, root, "Makefile", "build:\n\techo build\ntest: build\n\techo test\n")
+	writeFixture(t, root, "compose.yaml", "services:\n  app:\n    image: nginx\n")
+	tasks, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, task := range tasks {
+		ids[task.ID] = true
+	}
+	for _, id := range []string{"cargo.root.build", "make.root.build", "make.root.test", "compose.root.up", "compose.root.down"} {
+		if !ids[id] {
+			t.Errorf("missing %s in %#v", id, tasks)
+		}
+	}
+}
+
 func writeFixture(t *testing.T, root, relative, contents string) {
 	t.Helper()
 	path := filepath.Join(root, relative)
