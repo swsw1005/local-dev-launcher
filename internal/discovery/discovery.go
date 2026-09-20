@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/swsw1005/local-dev-launcher/internal/domain"
+	"github.com/swsw1005/local-dev-launcher/internal/project"
 	"github.com/swsw1005/local-dev-launcher/internal/state"
 )
 
@@ -114,12 +115,21 @@ func mergeTasks(static, dynamic []domain.Task) []domain.Task {
 // Sources returns checksummed files whose changes can affect discovery.
 func Sources(root string) ([]Source, error) {
 	var sources []Source
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	config, err := project.LoadConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	configPath := filepath.Join(root, ".ldr", "project.toml")
+	if contents, err := os.ReadFile(configPath); err == nil {
+		digest := sha256.Sum256(contents)
+		sources = append(sources, Source{Path: ".ldr/project.toml", Adapter: "project", Checksum: fmt.Sprintf("sha256:%x", digest)})
+	}
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			if ignoredDirectory(entry.Name()) {
+			if ignoredDirectory(entry.Name(), config.Ignore...) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -178,12 +188,16 @@ func sameSources(left, right []Source) bool {
 // build tool. Tool-specific dynamic task discovery can extend this registry.
 func Discover(root string) ([]domain.Task, error) {
 	var tasks []domain.Task
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	config, err := project.LoadConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			if ignoredDirectory(entry.Name()) {
+			if ignoredDirectory(entry.Name(), config.Ignore...) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -373,11 +387,15 @@ func exists(path string) bool {
 	return err == nil
 }
 
-func ignoredDirectory(name string) bool {
+func ignoredDirectory(name string, custom ...string) bool {
 	switch name {
 	case ".git", ".gradle", ".ldr", ".next", ".worktrees", "node_modules", "build", "dist", "target":
 		return true
-	default:
-		return false
 	}
+	for _, ignored := range custom {
+		if name == ignored {
+			return true
+		}
+	}
+	return false
 }
