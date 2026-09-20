@@ -41,6 +41,7 @@ Commands:
   ps [--json]        List LDR-managed processes
   stop <process-id> Stop a managed process
   cleanup [--yes]    Find or terminate orphaned processes
+  doctor [--json]    Diagnose the project and LDR environment
   restart <process-id> Restart a managed process
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
@@ -147,6 +148,12 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return err
 		}
 		return a.cleanup(ctx, directory, confirm)
+	case args[0] == "doctor":
+		jsonOutput, err := validateDoctorArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		return a.doctor(ctx, directory, jsonOutput)
 	case args[0] == "restart":
 		if len(args) != 2 {
 			return errors.New("usage: ldr restart <process-id>")
@@ -679,6 +686,84 @@ func (a App) cleanup(ctx context.Context, directory string, confirm bool) error 
 	return nil
 }
 
+type doctorCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
+}
+
+func (a App) doctor(ctx context.Context, directory string, jsonOutput bool) error {
+	root, err := a.findRoot(directory)
+	if err != nil {
+		return fmt.Errorf("find project root: %w", err)
+	}
+	layout := state.NewLayout(root)
+	checks := make([]doctorCheck, 0, 8)
+	add := func(name, status, message, hint string) {
+		checks = append(checks, doctorCheck{Name: name, Status: status, Message: message, Hint: hint})
+	}
+	if config, err := project.LoadConfig(root); err != nil {
+		add("project-config", "ERROR", err.Error(), "Fix .ldr/project.toml and run ldr doctor again.")
+	} else if config.DefaultProfile != "" {
+		add("project-config", "OK", fmt.Sprintf(".ldr/project.toml loaded; default profile %s", config.DefaultProfile), "")
+	} else {
+		add("project-config", "OK", "No project overrides configured", "")
+	}
+	if status, err := gitignore.Check(ctx, a.git, root); err != nil {
+		add("gitignore", "ERROR", err.Error(), "Ensure Git is available and .ldr/ can be checked.")
+	} else if !status.InRepository {
+		add("gitignore", "WARN", "Project is not inside a Git work tree", "Add .ldr/ to .gitignore when using Git.")
+	} else if !status.Ignored {
+		add("gitignore", "WARN", ".ldr/ is not ignored by Git", "Add .ldr/ to .gitignore.")
+	} else {
+		add("gitignore", "OK", ".ldr/ is ignored by Git", "")
+	}
+	missing := make([]string, 0)
+	for name, path := range map[string]string{"cache": layout.Cache, "profiles": layout.Profiles, "state": layout.State} {
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		add("state", "WARN", "Missing .ldr directories: "+strings.Join(missing, ", "), "Run ldr init to create local state.")
+	} else {
+		add("state", "OK", ".ldr cache, profiles, and state directories are present", "")
+	}
+	if records := process.New(layout).List(); len(records) == 0 {
+		add("processes", "OK", "No managed process metadata found", "")
+	} else {
+		orphaned := 0
+		for _, record := range records {
+			if record.Status == "ORPHANED" {
+				orphaned++
+			}
+		}
+		if orphaned > 0 {
+			add("processes", "WARN", fmt.Sprintf("%d orphaned managed process record(s)", orphaned), "Run ldr cleanup to review them.")
+		} else {
+			add("processes", "OK", fmt.Sprintf("%d managed process record(s)", len(records)), "")
+		}
+	}
+	if installed, err := runtimes.ListInstalled(); err != nil {
+		add("runtimes", "WARN", err.Error(), "Run ldr runtime list or install a required runtime.")
+	} else {
+		add("runtimes", "OK", fmt.Sprintf("%d installed runtime family(ies)", len(installed)), "")
+	}
+	if jsonOutput {
+		return json.NewEncoder(a.out).Encode(checks)
+	}
+	fmt.Fprintln(a.out, "CHECK\tSTATUS\tMESSAGE")
+	for _, check := range checks {
+		fmt.Fprintf(a.out, "%s\t%s\t%s\n", check.Name, check.Status, check.Message)
+		if check.Hint != "" {
+			fmt.Fprintf(a.out, "\t\tHint: %s\n", check.Hint)
+		}
+	}
+	return nil
+}
+
 func (a App) restart(ctx context.Context, directory, processID string) error {
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
@@ -952,6 +1037,16 @@ func validateCleanupArgs(args []string) (bool, error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("usage: ldr cleanup [--yes, -y]")
+}
+
+func validateDoctorArgs(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	if len(args) == 1 && args[0] == "--json" {
+		return true, nil
+	}
+	return false, fmt.Errorf("usage: ldr doctor [--json]")
 }
 
 func isHelp(arg string) bool {
