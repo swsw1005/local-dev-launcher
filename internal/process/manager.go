@@ -106,6 +106,30 @@ func (m Manager) List() []Record {
 	return records
 }
 
+// Reconcile refreshes persisted records whose process state may have changed
+// while LDR was not running. It does not terminate anything; orphan cleanup is
+// intentionally a separate operation.
+func (m Manager) Reconcile() []Record {
+	records := m.List()
+	changed := false
+	for index := range records {
+		if records[index].Status != "RUNNING" && records[index].Status != "STOPPING" {
+			continue
+		}
+		if processAlive(records[index].PID, records[index].PGID) {
+			continue
+		}
+		finished := time.Now().UTC()
+		records[index].FinishedAt = &finished
+		records[index].Status = "ORPHANED"
+		changed = true
+	}
+	if changed {
+		_ = m.save(records)
+	}
+	return records
+}
+
 func (m Manager) Stop(id string) (Record, error) {
 	records := m.List()
 	for index := range records {
