@@ -120,11 +120,7 @@ func (m Manager) Logs(id string) ([]byte, error) {
 }
 
 func (m Manager) save(records []Record) error {
-	contents, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(m.layout.State, "processes.json"), append(contents, '\n'), 0o644)
+	return state.WriteJSON(filepath.Join(m.layout.State, "processes.json"), records)
 }
 
 func safeID(value string) string {
