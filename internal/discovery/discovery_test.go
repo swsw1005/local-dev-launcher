@@ -151,6 +151,38 @@ func TestDiscoverIgnoresGeneratedAndNestedWorktreeDirectories(t *testing.T) {
 	}
 }
 
+func TestDiscoverHonorsProjectIgnoreAndInvalidatesOnConfigChange(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "package.json", `{"scripts":{"dev":"vite"}}`)
+	writeFixture(t, root, "vendor/package.json", `{"scripts":{"dev":"vite"}}`)
+	writeFixture(t, root, ".ldr/project.toml", "version = 1\nignore = [\"vendor\"]\n")
+	layout := state.NewLayout(root)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := LoadOrDiscover(root, layout, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Tasks) != 1 || first.Tasks[0].ID != "node.root.dev" {
+		t.Fatalf("tasks = %#v", first.Tasks)
+	}
+	second, err := LoadOrDiscover(root, layout, false)
+	if err != nil || !second.Cached {
+		t.Fatalf("second = %#v, err=%v", second, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".ldr", "project.toml"), []byte("version = 1\nignore = []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	third, err := LoadOrDiscover(root, layout, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Cached || len(third.Tasks) != 2 {
+		t.Fatalf("changed config did not rediscover: %#v", third)
+	}
+}
+
 func writeFixture(t *testing.T, root, relative, contents string) {
 	t.Helper()
 	path := filepath.Join(root, relative)
