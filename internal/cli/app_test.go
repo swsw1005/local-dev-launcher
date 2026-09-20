@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/swsw1005/local-dev-launcher/internal/gitignore"
+	"github.com/swsw1005/local-dev-launcher/internal/process"
+	"github.com/swsw1005/local-dev-launcher/internal/state"
 )
 
 type stubGit struct{ status gitignore.Status }
@@ -152,6 +155,30 @@ func TestListOutputsDiscoveredTasksAsJSON(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].ID != "node.root.dev" {
 		t.Fatalf("tasks = %#v", tasks)
+	}
+}
+
+func TestPSOutputsReconciledJSON(t *testing.T) {
+	root := t.TempDir()
+	layout := state.NewLayout(root)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	record := process.Record{ID: "stale", TaskID: "node.root.dev", PID: 999999, StartedAt: time.Now().Add(-time.Minute), LogPath: filepath.Join(layout.State, "stale.log"), Status: "RUNNING"}
+	if err := state.WriteJSON(filepath.Join(layout.State, "processes.json"), []process.Record{record}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"ps", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	var records []process.Record
+	if err := json.Unmarshal(out.Bytes(), &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Status != "ORPHANED" {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
