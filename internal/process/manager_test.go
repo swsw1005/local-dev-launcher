@@ -120,4 +120,11 @@ func TestReconcileMarksMissingProcessAsOrphaned(t *testing.T) {
 	if got := manager.List()[0].Status; got != "ORPHANED" {
 		t.Fatalf("persisted status = %q", got)
 	}
+	stopped, err := manager.Stop("stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Status != "STOPPED" {
+		t.Fatalf("stopped status = %q", stopped.Status)
+	}
 }

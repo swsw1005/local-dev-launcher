@@ -136,7 +136,7 @@ func (m Manager) Stop(id string) (Record, error) {
 		if records[index].ID != id {
 			continue
 		}
-		if records[index].Status != "RUNNING" && records[index].Status != "STOPPING" {
+		if records[index].Status != "RUNNING" && records[index].Status != "STOPPING" && records[index].Status != "ORPHANED" {
 			return records[index], nil
 		}
 		records[index].Status = "STOPPING"
