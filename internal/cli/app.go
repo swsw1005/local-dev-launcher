@@ -590,7 +590,7 @@ func (a App) run(ctx context.Context, directory, taskID string) error {
 	}
 	err = execution.RunWithOptions(ctx, root, task, a.out, a.errOut, options)
 	if err == nil {
-		_ = recordRecent(root, taskID)
+		_ = recordRecent(root, task.ID)
 	}
 	return err
 }
@@ -611,7 +611,7 @@ func (a App) start(ctx context.Context, directory, taskID string) error {
 	if err != nil {
 		return err
 	}
-	_ = recordRecent(root, taskID)
+	_ = recordRecent(root, task.ID)
 	fmt.Fprintf(a.out, "Started %s\nPID: %d\nProcess: %s\nLogs: %s\n", record.TaskID, record.PID, record.ID, record.LogPath)
 	return nil
 }
