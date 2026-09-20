@@ -194,6 +194,31 @@ func TestAliasCreateAndList(t *testing.T) {
 	}
 }
 
+func TestRecentTasksAreListedInExecutionOrder(t *testing.T) {
+	root := t.TempDir()
+	layout := state.NewLayout(root)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteJSON(filepath.Join(layout.State, "recent.json"), []string{"node.root.test", "node.root.dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite","test":"vitest"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"list", "--recent", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	var tasks []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &tasks); err != nil || len(tasks) != 2 || tasks[0].ID != "node.root.test" {
+		t.Fatalf("tasks = %#v, err=%v", tasks, err)
+	}
+}
+
 func TestPSOutputsReconciledJSON(t *testing.T) {
 	root := t.TempDir()
 	layout := state.NewLayout(root)

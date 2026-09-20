@@ -36,7 +36,7 @@ Usage:
 
 Commands:
   init [--yes, -y]  Create project-local .ldr state
-  list [--json] [--search query] List discovered runnable tasks
+  list [--json] [--recent] [--search query] List discovered runnable tasks
   refresh           Rebuild the discovery cache
   run <task-id>     Run a discovered task
   start <task-id>   Start a task in the background
@@ -117,13 +117,13 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 		}
 		return a.initShell()
 	case args[0] == "list":
-		jsonOutput, query, err := validateListArgs(args[1:])
+		jsonOutput, query, recent, err := validateListArgs(args[1:])
 		if err != nil {
 			return err
 		}
-		return a.list(ctx, directory, jsonOutput, query, false)
+		return a.list(ctx, directory, jsonOutput, query, recent, false)
 	case len(args) == 1 && args[0] == "refresh":
-		return a.list(ctx, directory, false, "", true)
+		return a.list(ctx, directory, false, "", false, true)
 	case args[0] == "run":
 		if len(args) != 2 {
 			return errors.New("usage: ldr run <task-id>")
@@ -588,7 +588,11 @@ func (a App) run(ctx context.Context, directory, taskID string) error {
 	if err != nil {
 		return err
 	}
-	return execution.RunWithOptions(ctx, root, task, a.out, a.errOut, options)
+	err = execution.RunWithOptions(ctx, root, task, a.out, a.errOut, options)
+	if err == nil {
+		_ = recordRecent(root, taskID)
+	}
+	return err
 }
 
 func (a App) start(ctx context.Context, directory, taskID string) error {
@@ -607,6 +611,7 @@ func (a App) start(ctx context.Context, directory, taskID string) error {
 	if err != nil {
 		return err
 	}
+	_ = recordRecent(root, taskID)
 	fmt.Fprintf(a.out, "Started %s\nPID: %d\nProcess: %s\nLogs: %s\n", record.TaskID, record.PID, record.ID, record.LogPath)
 	return nil
 }
@@ -992,7 +997,7 @@ func hasTask(tasks []domain.Task, taskID string) bool {
 	return false
 }
 
-func (a App) list(ctx context.Context, directory string, jsonOutput bool, query string, force bool) error {
+func (a App) list(ctx context.Context, directory string, jsonOutput bool, query string, recent, force bool) error {
 	if err := a.initialize(ctx, directory, jsonOutput); err != nil {
 		return err
 	}
@@ -1019,6 +1024,23 @@ func (a App) list(ctx context.Context, directory string, jsonOutput bool, query 
 		printTasks(a.out, filtered)
 		return nil
 	}
+	if recent {
+		byID := make(map[string]domain.Task, len(result.Tasks))
+		for _, task := range result.Tasks {
+			byID[task.ID] = task
+		}
+		ordered := make([]domain.Task, 0)
+		for _, id := range recentTasks(root) {
+			if task, ok := byID[id]; ok {
+				ordered = append(ordered, task)
+			}
+		}
+		if jsonOutput {
+			return json.NewEncoder(a.out).Encode(ordered)
+		}
+		printTasks(a.out, ordered)
+		return nil
+	}
 	if jsonOutput {
 		return json.NewEncoder(a.out).Encode(result.Tasks)
 	}
@@ -1039,6 +1061,29 @@ func printTasks(out io.Writer, tasks []domain.Task) {
 		}
 		fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", task.ID, task.Adapter, task.Module, command)
 	}
+}
+
+func recordRecent(root, taskID string) error {
+	path := filepath.Join(state.NewLayout(root).State, "recent.json")
+	recent, err := state.ReadJSON[[]string](path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	ordered := []string{taskID}
+	for _, existing := range recent {
+		if existing != taskID && len(ordered) < 20 {
+			ordered = append(ordered, existing)
+		}
+	}
+	return state.WriteJSON(path, ordered)
+}
+
+func recentTasks(root string) []string {
+	recent, err := state.ReadJSON[[]string](filepath.Join(state.NewLayout(root).State, "recent.json"))
+	if err != nil {
+		return nil
+	}
+	return recent
 }
 
 func (a App) initialize(ctx context.Context, directory string, quiet bool) error {
@@ -1079,27 +1124,30 @@ func validateInitArgs(args []string) error {
 	return fmt.Errorf("usage: ldr init [--yes, -y]")
 }
 
-func validateListArgs(args []string) (bool, string, error) {
+func validateListArgs(args []string) (bool, string, bool, error) {
 	if len(args) == 0 {
-		return false, "", nil
+		return false, "", false, nil
 	}
 	jsonOutput := false
 	query := ""
+	recent := false
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "--json":
 			jsonOutput = true
 		case "--search":
 			if index+1 >= len(args) || args[index+1] == "" {
-				return false, "", fmt.Errorf("usage: ldr list [--json] [--search query]")
+				return false, "", false, fmt.Errorf("usage: ldr list [--json] [--recent] [--search query]")
 			}
 			query = args[index+1]
 			index++
+		case "--recent":
+			recent = true
 		default:
-			return false, "", fmt.Errorf("usage: ldr list [--json] [--search query]")
+			return false, "", false, fmt.Errorf("usage: ldr list [--json] [--recent] [--search query]")
 		}
 	}
-	return jsonOutput, query, nil
+	return jsonOutput, query, recent, nil
 }
 
 func validatePSArgs(args []string) (bool, error) {
