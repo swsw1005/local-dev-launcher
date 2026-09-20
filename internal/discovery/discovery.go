@@ -167,6 +167,12 @@ func adapterFor(name string) string {
 		return "node"
 	case "go.mod", "go.work":
 		return "go"
+	case "Cargo.toml":
+		return "cargo"
+	case "Makefile", "makefile":
+		return "make"
+	case "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml":
+		return "compose"
 	default:
 		return ""
 	}
@@ -224,6 +230,16 @@ func Discover(root string) ([]domain.Task, error) {
 			tasks = append(tasks, found...)
 		case "go.mod":
 			tasks = append(tasks, discoverGoModule(root, filepath.Dir(path))...)
+		case "Cargo.toml":
+			tasks = append(tasks, discoverCargoModule(root, filepath.Dir(path))...)
+		case "Makefile", "makefile":
+			found, err := discoverMakeTargets(root, path)
+			if err != nil {
+				return err
+			}
+			tasks = append(tasks, found...)
+		case "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml":
+			tasks = append(tasks, discoverComposeTasks(root, path)...)
 		}
 		return nil
 	})
