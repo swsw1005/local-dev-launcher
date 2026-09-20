@@ -50,9 +50,40 @@ describe behavior, compatibility impact, and validation commands; link the
 corresponding GitHub issue. Include CLI examples or screenshots when changing
 user-visible output.
 
+## Development Workflow
+
+Start each development cycle from the latest `main` by creating a dated
+integration branch:
+
+```text
+dev/{yyyy.mm.dd}
+```
+
+Create feature branches from that branch using `feature/issue-{issueNo}`.
+Develop and validate the feature there, then open a PR into the dated `dev`
+branch. Keep issue scope, implementation, tests, and documentation aligned.
+
+Before merging `dev` into `main`, run the complete test and verification
+checklist on `dev`, update the final documentation, and obtain an independent
+sub-agent review of the diff, docs, linked issues, and release impact. Merge
+only after that review approves the integration.
+
+After `main` is merged, create the release tag automatically from the main
+commit. Build release artifacts from that tag, attach them to the GitHub
+Release, and update release information in `swsw1005/home-tab`.
+
+## Verification Checklist
+
+Run `gofmt`, `go test ./...`, `git diff --check`, and a clean `CGO_ENABLED=0`
+build. For releases, build both `darwin_arm64` and `darwin_amd64`, verify the
+native archive with `ldr --version`, and validate every archive with the
+generated SHA-256 file.
+
 ## Releases
 
-Run the full Go test suite before releasing. Build from the release tag for
+Use the release tag as the sole source of truth. Run the full Go test suite
+before releasing. Build from the release tag for
 `darwin_arm64` and `darwin_amd64` with `CGO_ENABLED=0`, `-trimpath`, and
 stripped linker flags. Attach both archives and a SHA-256 checksum file to the
-GitHub Release, then verify the native archive with `ldr --version`.
+GitHub Release, then verify the native archive with `ldr --version`. Finish by
+updating the corresponding release metadata in `swsw1005/home-tab`.
