@@ -101,3 +101,23 @@ func TestRestartCreatesNewManagedProcess(t *testing.T) {
 		t.Fatalf("restart did not create a new process: first=%#v second=%#v", first, second)
 	}
 }
+
+func TestReconcileMarksMissingProcessAsOrphaned(t *testing.T) {
+	root := t.TempDir()
+	layout := state.NewLayout(root)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(layout)
+	record := Record{ID: "stale", TaskID: "test.stale", PID: 999999, StartedAt: time.Now().Add(-time.Minute), LogPath: filepath.Join(root, "stale.log"), Status: "RUNNING"}
+	if err := state.WriteJSON(filepath.Join(layout.State, "processes.json"), []Record{record}); err != nil {
+		t.Fatal(err)
+	}
+	reconciled := manager.Reconcile()
+	if len(reconciled) != 1 || reconciled[0].Status != "ORPHANED" || reconciled[0].FinishedAt == nil {
+		t.Fatalf("reconciled = %#v", reconciled)
+	}
+	if got := manager.List()[0].Status; got != "ORPHANED" {
+		t.Fatalf("persisted status = %q", got)
+	}
+}
