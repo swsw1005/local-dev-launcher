@@ -158,6 +158,42 @@ func TestListOutputsDiscoveredTasksAsJSON(t *testing.T) {
 	}
 }
 
+func TestListSearchOutputsRankedJSON(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"list", "--search", "dev", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	var matches []struct {
+		Task struct {
+			ID string `json:"id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &matches); err != nil || len(matches) != 1 || matches[0].Task.ID != "node.root.dev" {
+		t.Fatalf("matches = %#v, err=%v", matches, err)
+	}
+}
+
+func TestAliasCreateAndList(t *testing.T) {
+	root := t.TempDir()
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"alias", "api", "gradle.api.bootRun"}, root); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"alias"}, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "api\tgradle.api.bootRun") {
+		t.Fatalf("aliases = %q", out.String())
+	}
+}
+
 func TestPSOutputsReconciledJSON(t *testing.T) {
 	root := t.TempDir()
 	layout := state.NewLayout(root)

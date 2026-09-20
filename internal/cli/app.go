@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/profile"
 	"github.com/swsw1005/local-dev-launcher/internal/project"
 	"github.com/swsw1005/local-dev-launcher/internal/runtimes"
+	"github.com/swsw1005/local-dev-launcher/internal/search"
 	"github.com/swsw1005/local-dev-launcher/internal/state"
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
@@ -34,7 +36,7 @@ Usage:
 
 Commands:
   init [--yes, -y]  Create project-local .ldr state
-  list [--json]     List discovered runnable tasks
+  list [--json] [--search query] List discovered runnable tasks
   refresh           Rebuild the discovery cache
   run <task-id>     Run a discovered task
   start <task-id>   Start a task in the background
@@ -42,6 +44,7 @@ Commands:
   stop <process-id> Stop a managed process
   cleanup [--yes]    Find or terminate orphaned processes
   doctor [--json]    Diagnose the project and LDR environment
+  alias [name target] List or create a task alias
   restart <process-id> Restart a managed process
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
@@ -114,13 +117,13 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 		}
 		return a.initShell()
 	case args[0] == "list":
-		jsonOutput, err := validateListArgs(args[1:])
+		jsonOutput, query, err := validateListArgs(args[1:])
 		if err != nil {
 			return err
 		}
-		return a.list(ctx, directory, jsonOutput, false)
+		return a.list(ctx, directory, jsonOutput, query, false)
 	case len(args) == 1 && args[0] == "refresh":
-		return a.list(ctx, directory, false, true)
+		return a.list(ctx, directory, false, "", true)
 	case args[0] == "run":
 		if len(args) != 2 {
 			return errors.New("usage: ldr run <task-id>")
@@ -154,6 +157,8 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return err
 		}
 		return a.doctor(ctx, directory, jsonOutput)
+	case args[0] == "alias":
+		return a.alias(ctx, directory, args[1:])
 	case args[0] == "restart":
 		if len(args) != 2 {
 			return errors.New("usage: ldr restart <process-id>")
@@ -764,6 +769,52 @@ func (a App) doctor(ctx context.Context, directory string, jsonOutput bool) erro
 	return nil
 }
 
+func (a App) alias(ctx context.Context, directory string, args []string) error {
+	if len(args) != 0 && len(args) != 2 {
+		return errors.New("usage: ldr alias [name target]")
+	}
+	if err := a.initialize(ctx, directory, len(args) == 0); err != nil {
+		return err
+	}
+	root, err := a.findRoot(directory)
+	if err != nil {
+		return fmt.Errorf("find project root: %w", err)
+	}
+	path := filepath.Join(state.NewLayout(root).State, "aliases.json")
+	aliases, err := state.ReadJSON[map[string]string](path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read aliases: %w", err)
+	}
+	if aliases == nil {
+		aliases = map[string]string{}
+	}
+	if len(args) == 0 {
+		if len(aliases) == 0 {
+			fmt.Fprintln(a.out, "No aliases found.")
+			return nil
+		}
+		keys := make([]string, 0, len(aliases))
+		for key := range aliases {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		fmt.Fprintln(a.out, "NAME\tTARGET")
+		for _, key := range keys {
+			fmt.Fprintf(a.out, "%s\t%s\n", key, aliases[key])
+		}
+		return nil
+	}
+	if _, err := profile.Filename(args[0]); err != nil {
+		return fmt.Errorf("invalid alias name: %w", err)
+	}
+	aliases[args[0]] = args[1]
+	if err := state.WriteJSON(path, aliases); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Created alias %q -> %s\n", args[0], args[1])
+	return nil
+}
+
 func (a App) restart(ctx context.Context, directory, processID string) error {
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
@@ -814,6 +865,13 @@ func (a App) logs(ctx context.Context, directory, processID string) error {
 
 func (a App) resolveRunnable(root, taskID string) (domain.Task, execution.Options, error) {
 	layout := state.NewLayout(root)
+	aliases := map[string]string{}
+	if loaded, err := state.ReadJSON[map[string]string](filepath.Join(layout.State, "aliases.json")); err == nil {
+		aliases = loaded
+		if target, ok := aliases[taskID]; ok {
+			taskID = target
+		}
+	}
 	result, err := discovery.LoadOrDiscover(root, layout, false)
 	if err != nil {
 		return domain.Task{}, execution.Options{}, fmt.Errorf("discover tasks: %w", err)
@@ -934,7 +992,7 @@ func hasTask(tasks []domain.Task, taskID string) bool {
 	return false
 }
 
-func (a App) list(ctx context.Context, directory string, jsonOutput, force bool) error {
+func (a App) list(ctx context.Context, directory string, jsonOutput bool, query string, force bool) error {
 	if err := a.initialize(ctx, directory, jsonOutput); err != nil {
 		return err
 	}
@@ -948,6 +1006,18 @@ func (a App) list(ctx context.Context, directory string, jsonOutput, force bool)
 	}
 	if force {
 		fmt.Fprintf(a.out, "Refreshed %d task(s).\n", len(result.Tasks))
+	}
+	if query != "" {
+		matches := search.Tasks(result.Tasks, query)
+		if jsonOutput {
+			return json.NewEncoder(a.out).Encode(matches)
+		}
+		filtered := make([]domain.Task, 0, len(matches))
+		for _, match := range matches {
+			filtered = append(filtered, match.Task)
+		}
+		printTasks(a.out, filtered)
+		return nil
 	}
 	if jsonOutput {
 		return json.NewEncoder(a.out).Encode(result.Tasks)
@@ -1009,14 +1079,27 @@ func validateInitArgs(args []string) error {
 	return fmt.Errorf("usage: ldr init [--yes, -y]")
 }
 
-func validateListArgs(args []string) (bool, error) {
+func validateListArgs(args []string) (bool, string, error) {
 	if len(args) == 0 {
-		return false, nil
+		return false, "", nil
 	}
-	if len(args) == 1 && args[0] == "--json" {
-		return true, nil
+	jsonOutput := false
+	query := ""
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--json":
+			jsonOutput = true
+		case "--search":
+			if index+1 >= len(args) || args[index+1] == "" {
+				return false, "", fmt.Errorf("usage: ldr list [--json] [--search query]")
+			}
+			query = args[index+1]
+			index++
+		default:
+			return false, "", fmt.Errorf("usage: ldr list [--json] [--search query]")
+		}
 	}
-	return false, fmt.Errorf("usage: ldr list [--json]")
+	return jsonOutput, query, nil
 }
 
 func validatePSArgs(args []string) (bool, error) {
