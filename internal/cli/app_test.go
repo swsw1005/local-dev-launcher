@@ -205,6 +205,25 @@ func TestCleanupListsOrphanedProcessesWithoutConfirmation(t *testing.T) {
 	}
 }
 
+func TestDoctorOutputsJSONWithoutCreatingState(t *testing.T) {
+	root := t.TempDir()
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"doctor", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	var checks []doctorCheck
+	if err := json.Unmarshal(out.Bytes(), &checks); err != nil {
+		t.Fatal(err)
+	}
+	if len(checks) == 0 || checks[0].Name != "project-config" {
+		t.Fatalf("checks = %#v", checks)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".ldr")); !os.IsNotExist(err) {
+		t.Fatalf("doctor created state directory: %v", err)
+	}
+}
+
 func TestRunReportsMissingTask(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
