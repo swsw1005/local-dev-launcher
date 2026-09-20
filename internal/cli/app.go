@@ -40,6 +40,7 @@ Commands:
   start <task-id>   Start a task in the background
   ps                List LDR-managed processes
   stop <process-id> Stop a managed process
+  restart <process-id> Restart a managed process
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
   runtime ...       Search, list, or activate managed runtimes
@@ -135,6 +136,11 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return errors.New("usage: ldr stop <process-id>")
 		}
 		return a.stop(ctx, directory, args[1])
+	case args[0] == "restart":
+		if len(args) != 2 {
+			return errors.New("usage: ldr restart <process-id>")
+		}
+		return a.restart(ctx, directory, args[1])
 	case args[0] == "logs":
 		if len(args) != 2 {
 			return errors.New("usage: ldr logs <process-id>")
@@ -615,6 +621,38 @@ func (a App) stop(ctx context.Context, directory, processID string) error {
 		return err
 	}
 	fmt.Fprintf(a.out, "Stopped %s\n", record.ID)
+	return nil
+}
+
+func (a App) restart(ctx context.Context, directory, processID string) error {
+	if err := a.initialize(ctx, directory, false); err != nil {
+		return err
+	}
+	root, err := a.findRoot(directory)
+	if err != nil {
+		return fmt.Errorf("find project root: %w", err)
+	}
+	layout := state.NewLayout(root)
+	manager := process.New(layout)
+	var existing process.Record
+	for _, record := range manager.List() {
+		if record.ID == processID {
+			existing = record
+			break
+		}
+	}
+	if existing.ID == "" {
+		return fmt.Errorf("process %q was not found", processID)
+	}
+	task, options, err := a.resolveRunnable(root, existing.TaskID)
+	if err != nil {
+		return err
+	}
+	restarted, err := manager.Restart(ctx, processID, task, options)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Restarted %s\nPID: %d\nProcess: %s\nLogs: %s\n", restarted.TaskID, restarted.PID, restarted.ID, restarted.LogPath)
 	return nil
 }
 
