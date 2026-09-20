@@ -18,6 +18,7 @@ type Profile struct {
 	Version     int
 	Name        string
 	Extends     string
+	EnvFrom     []string
 	Env         map[string]string
 	PrependArgs []string
 	AppendArgs  []string
@@ -62,6 +63,9 @@ func Save(path string, profile Profile) error {
 	}
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "version = %d\nname = %s\nextends = %s\n", profile.Version, strconv.Quote(profile.Name), strconv.Quote(profile.Extends))
+	if len(profile.EnvFrom) > 0 {
+		fmt.Fprintf(&builder, "env_from = %s\n", quotedList(profile.EnvFrom))
+	}
 	if len(profile.Env) > 0 {
 		builder.WriteString("\n[env]\n")
 		keys := make([]string, 0, len(profile.Env))
@@ -126,6 +130,11 @@ func Load(path string) (Profile, error) {
 				if err != nil {
 					return Profile{}, fmt.Errorf("parse %s extends: %w", path, err)
 				}
+			case "env_from":
+				profile.EnvFrom, err = parseList(value)
+				if err != nil {
+					return Profile{}, fmt.Errorf("parse %s env_from: %w", path, err)
+				}
 			}
 		case "env":
 			parsed, err := strconv.Unquote(value)
@@ -185,6 +194,71 @@ func parseList(value string) ([]string, error) {
 	var values []string
 	if err := json.Unmarshal([]byte(value), &values); err != nil {
 		return nil, err
+	}
+	return values, nil
+}
+
+// ResolveEnv loads env files in declaration order and applies profile values
+// last. Relative paths are resolved from the project root.
+func ResolveEnv(root string, envFrom []string, overrides map[string]string) (map[string]string, error) {
+	values := make(map[string]string)
+	lookup := func(key string) string {
+		if value, ok := values[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
+	}
+	for _, filename := range envFrom {
+		path := filename
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		loaded, err := loadEnvFile(path)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range loaded {
+			values[key] = os.Expand(value, lookup)
+		}
+	}
+	for key, value := range overrides {
+		values[key] = os.Expand(value, lookup)
+	}
+	return values, nil
+}
+
+func loadEnvFile(path string) (map[string]string, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load env file %s: %w", path, err)
+	}
+	values := make(map[string]string)
+	for number, rawLine := range strings.Split(string(contents), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			return nil, fmt.Errorf("parse env file %s line %d", path, number+1)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			if value[0] == '"' {
+				unquoted, err := strconv.Unquote(value)
+				if err != nil {
+					return nil, fmt.Errorf("parse env file %s line %d: %w", path, number+1, err)
+				}
+				value = unquoted
+			} else {
+				value = value[1 : len(value)-1]
+			}
+		} else if comment := strings.Index(value, " #"); comment >= 0 {
+			value = strings.TrimSpace(value[:comment])
+		}
+		values[key] = value
 	}
 	return values, nil
 }

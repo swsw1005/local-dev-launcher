@@ -747,7 +747,11 @@ func (a App) resolveRunnable(root, taskID string) (domain.Task, execution.Option
 	}
 	for _, task := range result.Tasks {
 		if task.ID == loaded.Extends {
-			return task, execution.Options{Env: loaded.Env, PrependArgs: loaded.PrependArgs, AppendArgs: loaded.AppendArgs}, nil
+			env, err := profile.ResolveEnv(root, loaded.EnvFrom, loaded.Env)
+			if err != nil {
+				return domain.Task{}, execution.Options{}, err
+			}
+			return task, execution.Options{Env: env, PrependArgs: loaded.PrependArgs, AppendArgs: loaded.AppendArgs}, nil
 		}
 	}
 	return domain.Task{}, execution.Options{}, fmt.Errorf("profile %q is BROKEN: base task %q was not found", loaded.Name, loaded.Extends)
@@ -817,10 +821,17 @@ func (a App) profile(ctx context.Context, directory string, args []string) error
 			return err
 		}
 		fmt.Fprintf(a.out, "Name: %s\nExtends: %s\n", loaded.Name, loaded.Extends)
+		if len(loaded.EnvFrom) > 0 {
+			fmt.Fprintf(a.out, "Environment files: %s\n", strings.Join(loaded.EnvFrom, ", "))
+		}
 		if len(loaded.Env) > 0 {
 			fmt.Fprintln(a.out, "Environment:")
 			for key, value := range loaded.Env {
-				fmt.Fprintf(a.out, "  %s=%s\n", key, value)
+				masked := "********"
+				if value == "" {
+					masked = ""
+				}
+				fmt.Fprintf(a.out, "  %s=%s\n", key, masked)
 			}
 		}
 		return nil
