@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/swsw1005/local-dev-launcher/internal/state"
 )
 
 // Installation is one runtime family available to LDR's resolver.
@@ -256,12 +258,8 @@ func readActiveState(store string) (activeState, error) {
 	return state, nil
 }
 
-func writeActiveState(store string, state activeState) error {
-	contents, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(activeStatePath(store), append(contents, '\n'), 0o644)
+func writeActiveState(store string, selection activeState) error {
+	return state.WriteJSON(activeStatePath(store), selection)
 }
 
 func linksMatch(spec runtimeSpec, runtimePath string) bool {

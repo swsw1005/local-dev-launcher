@@ -48,9 +48,9 @@ func LoadOrDiscover(root string, layout state.Layout, force bool) (Result, error
 		return Result{}, err
 	}
 	if !force {
-		manifest, err := readJSON[Manifest](filepath.Join(layout.Cache, "manifest.json"))
+		manifest, err := state.ReadJSON[Manifest](filepath.Join(layout.Cache, "manifest.json"))
 		if err == nil && manifest.Version == cacheVersion && sameSources(manifest.Sources, sources) {
-			registry, err := readJSON[Registry](filepath.Join(layout.Cache, "tasks.json"))
+			registry, err := state.ReadJSON[Registry](filepath.Join(layout.Cache, "tasks.json"))
 			if err == nil && registry.Version == cacheVersion {
 				return Result{Tasks: registry.Tasks, Cached: true}, nil
 			}
@@ -61,10 +61,10 @@ func LoadOrDiscover(root string, layout state.Layout, force bool) (Result, error
 	if err != nil {
 		return Result{}, err
 	}
-	if err := writeJSON(filepath.Join(layout.Cache, "manifest.json"), Manifest{Version: cacheVersion, Sources: sources}); err != nil {
+	if err := state.WriteJSON(filepath.Join(layout.Cache, "manifest.json"), Manifest{Version: cacheVersion, Sources: sources}); err != nil {
 		return Result{}, err
 	}
-	if err := writeJSON(filepath.Join(layout.Cache, "tasks.json"), Registry{Version: cacheVersion, Tasks: tasks}); err != nil {
+	if err := state.WriteJSON(filepath.Join(layout.Cache, "tasks.json"), Registry{Version: cacheVersion, Tasks: tasks}); err != nil {
 		return Result{}, err
 	}
 	return Result{Tasks: tasks}, nil
@@ -380,28 +380,4 @@ func ignoredDirectory(name string) bool {
 	default:
 		return false
 	}
-}
-
-func writeJSON(path string, value any) error {
-	contents, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	contents = append(contents, '\n')
-	if err := os.WriteFile(path, contents, 0o644); err != nil {
-		return err
-	}
-	return nil
-}
-
-func readJSON[T any](path string) (T, error) {
-	var value T
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return value, err
-	}
-	if err := json.Unmarshal(contents, &value); err != nil {
-		return value, err
-	}
-	return value, nil
 }
