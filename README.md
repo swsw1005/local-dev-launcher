@@ -262,6 +262,33 @@ gofmt -w ./cmd ./internal
 Cross-platform compile checks can be run with `CGO_ENABLED=0 GOOS=windows
 GOARCH=amd64 go test -c ./internal/cli`.
 
+### Branch and PR workflow
+
+Start from the latest `main` and create a dated integration branch:
+
+```text
+dev/{yyyy.mm.dd}
+```
+
+Create feature branches from it as `feature/issue-{issueNo}` and open feature
+PRs into the dated `dev` branch. Run the full verification checklist and update
+docs on `dev`. Before `dev` → `main`, an independent sub-agent must review the
+combined diff, documentation, linked issues, and release impact.
+
+After merging into `main`, tag the main commit automatically. Releases are
+built from the tag, with both macOS architecture archives and checksums
+attached to the GitHub Release. Update the release information in
+`swsw1005/home-tab` as the final step.
+
+### Release verification
+
+Run `gofmt -w ./cmd ./internal`, `go test ./...`, and `git diff --check`.
+Build both macOS architectures with `CGO_ENABLED=0`, `-trimpath`, and stripped
+linker flags. Package `ldr_<version>_darwin_arm64.tar.gz` and
+`ldr_<version>_darwin_amd64.tar.gz`, generate
+`ldr_<version>_SHA256SUMS.txt`, attach all three files to the matching release,
+and run `ldr --version` from the native archive.
+
 ## Roadmap
 
 1. Release packaging and distribution improvements
