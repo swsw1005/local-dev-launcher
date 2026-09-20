@@ -40,6 +40,7 @@ Commands:
   start <task-id>   Start a task in the background
   ps [--json]        List LDR-managed processes
   stop <process-id> Stop a managed process
+  cleanup [--yes]    Find or terminate orphaned processes
   restart <process-id> Restart a managed process
   logs <process-id> Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
@@ -140,6 +141,12 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return errors.New("usage: ldr stop <process-id>")
 		}
 		return a.stop(ctx, directory, args[1])
+	case args[0] == "cleanup":
+		confirm, err := validateCleanupArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		return a.cleanup(ctx, directory, confirm)
 	case args[0] == "restart":
 		if len(args) != 2 {
 			return errors.New("usage: ldr restart <process-id>")
@@ -634,6 +641,44 @@ func (a App) stop(ctx context.Context, directory, processID string) error {
 	return nil
 }
 
+func (a App) cleanup(ctx context.Context, directory string, confirm bool) error {
+	if err := a.initialize(ctx, directory, false); err != nil {
+		return err
+	}
+	root, err := a.findRoot(directory)
+	if err != nil {
+		return fmt.Errorf("find project root: %w", err)
+	}
+	manager := process.New(state.NewLayout(root))
+	records := manager.Reconcile()
+	orphaned := make([]process.Record, 0)
+	for _, record := range records {
+		if record.Status == "ORPHANED" {
+			orphaned = append(orphaned, record)
+		}
+	}
+	if len(orphaned) == 0 {
+		fmt.Fprintln(a.out, "No orphaned processes.")
+		return nil
+	}
+	if !confirm {
+		fmt.Fprintln(a.out, "Orphaned processes (nothing terminated):")
+		fmt.Fprintln(a.out, "PROCESS\tPID\tPGID\tTASK")
+		for _, record := range orphaned {
+			fmt.Fprintf(a.out, "%s\t%d\t%d\t%s\n", record.ID, record.PID, record.PGID, record.TaskID)
+		}
+		fmt.Fprintln(a.out, "Run `ldr cleanup --yes` to terminate these LDR-managed process groups.")
+		return nil
+	}
+	for _, record := range orphaned {
+		if _, err := manager.Stop(record.ID); err != nil {
+			return fmt.Errorf("cleanup %s: %w", record.ID, err)
+		}
+		fmt.Fprintf(a.out, "Stopped %s (PID %d, PGID %d)\n", record.ID, record.PID, record.PGID)
+	}
+	return nil
+}
+
 func (a App) restart(ctx context.Context, directory, processID string) error {
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
@@ -886,6 +931,16 @@ func validatePSArgs(args []string) (bool, error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("usage: ldr ps [--json]")
+}
+
+func validateCleanupArgs(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	if len(args) == 1 && (args[0] == "--yes" || args[0] == "-y") {
+		return true, nil
+	}
+	return false, fmt.Errorf("usage: ldr cleanup [--yes, -y]")
 }
 
 func isHelp(arg string) bool {
