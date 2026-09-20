@@ -38,7 +38,7 @@ Commands:
   refresh           Rebuild the discovery cache
   run <task-id>     Run a discovered task
   start <task-id>   Start a task in the background
-  ps                List LDR-managed processes
+  ps [--json]        List LDR-managed processes
   stop <process-id> Stop a managed process
   restart <process-id> Restart a managed process
   logs <process-id> Print process logs
@@ -129,8 +129,12 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return errors.New("usage: ldr start <task-id-or-profile>")
 		}
 		return a.start(ctx, directory, args[1])
-	case len(args) == 1 && args[0] == "ps":
-		return a.ps(ctx, directory)
+	case args[0] == "ps":
+		jsonOutput, err := validatePSArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		return a.ps(ctx, directory, jsonOutput)
 	case args[0] == "stop":
 		if len(args) != 2 {
 			return errors.New("usage: ldr stop <process-id>")
@@ -588,7 +592,7 @@ func (a App) start(ctx context.Context, directory, taskID string) error {
 	return nil
 }
 
-func (a App) ps(ctx context.Context, directory string) error {
+func (a App) ps(ctx context.Context, directory string, jsonOutput bool) error {
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
 	}
@@ -596,7 +600,13 @@ func (a App) ps(ctx context.Context, directory string) error {
 	if err != nil {
 		return fmt.Errorf("find project root: %w", err)
 	}
-	records := process.New(state.NewLayout(root)).List()
+	records := process.New(state.NewLayout(root)).Reconcile()
+	if jsonOutput {
+		if records == nil {
+			records = []process.Record{}
+		}
+		return json.NewEncoder(a.out).Encode(records)
+	}
 	if len(records) == 0 {
 		fmt.Fprintln(a.out, "No managed processes.")
 		return nil
@@ -866,6 +876,16 @@ func validateListArgs(args []string) (bool, error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("usage: ldr list [--json]")
+}
+
+func validatePSArgs(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	if len(args) == 1 && args[0] == "--json" {
+		return true, nil
+	}
+	return false, fmt.Errorf("usage: ldr ps [--json]")
 }
 
 func isHelp(arg string) bool {
