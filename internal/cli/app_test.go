@@ -182,6 +182,29 @@ func TestPSOutputsReconciledJSON(t *testing.T) {
 	}
 }
 
+func TestCleanupListsOrphanedProcessesWithoutConfirmation(t *testing.T) {
+	root := t.TempDir()
+	layout := state.NewLayout(root)
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	record := process.Record{ID: "stale", TaskID: "node.root.dev", PID: 999999, StartedAt: time.Now().Add(-time.Minute), LogPath: filepath.Join(layout.State, "stale.log"), Status: "RUNNING"}
+	if err := state.WriteJSON(filepath.Join(layout.State, "processes.json"), []process.Record{record}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.Run(context.Background(), []string{"cleanup"}, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "nothing terminated") || !strings.Contains(out.String(), "ldr cleanup --yes") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if got := process.New(layout).List()[0].Status; got != "ORPHANED" {
+		t.Fatalf("status = %q, want ORPHANED", got)
+	}
+}
+
 func TestRunReportsMissingTask(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
