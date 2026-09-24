@@ -107,8 +107,8 @@ func AppendMissing() ([]File, error) {
 	return files, nil
 }
 
-// DetectedAgentFiles returns instruction files for the detected agent
-// environments. The guide itself is not checked during normal startup.
+// DetectedAgentFiles returns instruction files and the shared guide for the
+// detected agent environments.
 func DetectedAgentFiles() []File {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -123,7 +123,6 @@ func DetectedAgentFiles() []File {
 	}
 	if len(files) > 0 {
 		guide := File{Name: "LDR runtime guide", Path: filepath.Join(home, ".ldr", "ldr_runtime_guide.md"), Marker: GuideMarker}
-		inspect(&guide)
 		files = append(files, guide)
 	}
 	for i := range files {
