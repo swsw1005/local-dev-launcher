@@ -728,11 +728,15 @@ func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentG
 			case file.Err != nil:
 				add("agent-guidance", "ERROR", fmt.Sprintf("Cannot inspect %s: %v", file.Name, file.Err), "Check file permissions and run ldr doctor again.")
 			case file.HasGuidance && file.Added:
-				add("agent-guidance", "OK", "Added LDR runtime guidance to "+file.Name, "")
+				add("agent-guidance", "OK", "Added "+file.Name, "")
 			case file.HasGuidance:
-				add("agent-guidance", "OK", file.Name+" contains the LDR guidance marker", "")
+				add("agent-guidance", "OK", file.Name+" contains its LDR marker", "")
 			default:
-				add("agent-guidance", "WARN", file.Name+" is missing the LDR runtime guidance marker", "Run `ldr doctor --fix-agent-guidance` to append the managed guidance block.")
+				message := file.Name + " is missing its LDR marker"
+				if file.Name != "LDR runtime guide" {
+					message = file.Name + " is missing a link to the LDR runtime guide"
+				}
+				add("agent-guidance", "WARN", message, "Run `ldr doctor --fix-agent-guidance` to create the guide and append missing links.")
 			}
 		}
 	}
