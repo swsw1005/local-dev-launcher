@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/swsw1005/local-dev-launcher/internal/agentguidance"
 	"github.com/swsw1005/local-dev-launcher/internal/cli"
@@ -18,10 +19,14 @@ func main() {
 		if len(os.Args) > 1 && os.Args[1] == "doctor" {
 			return
 		}
+		missing := make([]string, 0, 3)
 		for _, file := range agentguidance.DetectedAgentFiles() {
 			if !file.HasGuidance && file.Err == nil {
-				fmt.Fprintf(os.Stderr, "ldr: %s has no LDR runtime guidance. Run `ldr doctor --fix-agent-guidance` to append it.\n", file.Name)
+				missing = append(missing, file.Name)
 			}
+		}
+		if len(missing) > 0 {
+			fmt.Fprintf(os.Stderr, "ldr: LDR runtime setup is incomplete (%s). Run `ldr doctor --fix-agent-guidance` to create the guide and add missing links.\n", strings.Join(missing, ", "))
 		}
 	}()
 

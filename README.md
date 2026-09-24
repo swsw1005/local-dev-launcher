@@ -170,13 +170,14 @@ ldr doctor --fix-agent-guidance
 ldr alias api gradle.homeops-agent-api.bootRun
 ```
 
-`ldr doctor` checks the current user's global Codex `~/.codex/AGENTS.md` and
-Claude Code `~/.claude/CLAUDE.md` for the exact marker
-`<!-- ldr:runtime-guidance:v1 -->`. If it is missing, `ldr doctor
-`--fix-agent-guidance` appends a managed guidance block when it is missing.
+`ldr doctor` checks the current user's `~/.ldr/ldr_runtime_guide.md` and the
+global Codex `~/.codex/AGENTS.md` and Claude Code `~/.claude/CLAUDE.md` for
+their LDR markers. Run `ldr doctor --fix-agent-guidance` to create the runtime
+guide and append links to global instruction files that are missing them.
+The guide explains runtime discovery, installation, and storage locations.
 Normal `ldr` startup only suggests that command when it detects a Codex or
-Claude Code environment; it does not modify instruction files. Repository
-instruction files are not changed.
+Claude Code environment; it does not modify files. Repository instruction
+files are not changed.
 
 LDR writes process metadata and logs only under `.ldr/state/`.
 
