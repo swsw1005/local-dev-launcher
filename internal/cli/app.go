@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swsw1005/local-dev-launcher/internal/agentguidance"
 	"github.com/swsw1005/local-dev-launcher/internal/discovery"
 	"github.com/swsw1005/local-dev-launcher/internal/domain"
 	"github.com/swsw1005/local-dev-launcher/internal/execution"
@@ -43,7 +44,7 @@ Commands:
   ps [--json]        List LDR-managed processes
   stop <process-id> Stop a managed process
   cleanup [--yes]    Find or terminate orphaned processes
-  doctor [--json]    Diagnose the project and LDR environment
+  doctor [--json] [--fix-agent-guidance] Diagnose project and agent runtime guidance
   alias [name target] List or create a task alias
   restart <process-id> Restart a managed process
   logs <process-id> Print process logs
@@ -152,11 +153,11 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 		}
 		return a.cleanup(ctx, directory, confirm)
 	case args[0] == "doctor":
-		jsonOutput, err := validateDoctorArgs(args[1:])
+		jsonOutput, fixAgentGuidance, err := validateDoctorArgs(args[1:])
 		if err != nil {
 			return err
 		}
-		return a.doctor(ctx, directory, jsonOutput)
+		return a.doctor(ctx, directory, jsonOutput, fixAgentGuidance)
 	case args[0] == "alias":
 		return a.alias(ctx, directory, args[1:])
 	case args[0] == "restart":
@@ -703,15 +704,37 @@ type doctorCheck struct {
 	Hint    string `json:"hint,omitempty"`
 }
 
-func (a App) doctor(ctx context.Context, directory string, jsonOutput bool) error {
+func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentGuidance bool) error {
 	root, err := a.findRoot(directory)
 	if err != nil {
 		return fmt.Errorf("find project root: %w", err)
 	}
 	layout := state.NewLayout(root)
-	checks := make([]doctorCheck, 0, 8)
+	checks := make([]doctorCheck, 0, 10)
 	add := func(name, status, message, hint string) {
 		checks = append(checks, doctorCheck{Name: name, Status: status, Message: message, Hint: hint})
+	}
+	var agentFiles []agentguidance.File
+	if fixAgentGuidance {
+		agentFiles, err = agentguidance.AppendMissing()
+	} else {
+		agentFiles, err = agentguidance.GlobalFiles()
+	}
+	if err != nil {
+		add("agent-guidance", "ERROR", err.Error(), "Check that the global agent instruction directories are accessible.")
+	} else {
+		for _, file := range agentFiles {
+			switch {
+			case file.Err != nil:
+				add("agent-guidance", "ERROR", fmt.Sprintf("Cannot inspect %s: %v", file.Name, file.Err), "Check file permissions and run ldr doctor again.")
+			case file.HasGuidance && file.Added:
+				add("agent-guidance", "OK", "Added LDR runtime guidance to "+file.Name, "")
+			case file.HasGuidance:
+				add("agent-guidance", "OK", file.Name+" contains the LDR guidance marker", "")
+			default:
+				add("agent-guidance", "WARN", file.Name+" is missing the LDR runtime guidance marker", "Run `ldr doctor --fix-agent-guidance` to append the managed guidance block.")
+			}
+		}
 	}
 	if config, err := project.LoadConfig(root); err != nil {
 		add("project-config", "ERROR", err.Error(), "Fix .ldr/project.toml and run ldr doctor again.")
@@ -1170,14 +1193,24 @@ func validateCleanupArgs(args []string) (bool, error) {
 	return false, fmt.Errorf("usage: ldr cleanup [--yes, -y]")
 }
 
-func validateDoctorArgs(args []string) (bool, error) {
-	if len(args) == 0 {
-		return false, nil
+func validateDoctorArgs(args []string) (jsonOutput, fixAgentGuidance bool, err error) {
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			if jsonOutput {
+				return false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance]")
+			}
+			jsonOutput = true
+		case "--fix-agent-guidance":
+			if fixAgentGuidance {
+				return false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance]")
+			}
+			fixAgentGuidance = true
+		default:
+			return false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance]")
+		}
 	}
-	if len(args) == 1 && args[0] == "--json" {
-		return true, nil
-	}
-	return false, fmt.Errorf("usage: ldr doctor [--json]")
+	return jsonOutput, fixAgentGuidance, nil
 }
 
 func isHelp(arg string) bool {
