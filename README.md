@@ -1,4 +1,4 @@
-# Local Dev Runner (LDR) 0.7.0
+# Local Dev Runner (LDR) 0.8.0
 
 Local Dev Runner is a terminal-first local development runner. It is designed
 to discover project tasks and provide one execution model for developers,
@@ -10,7 +10,7 @@ Discover → Resolve → Run → Manage
 
 ## Status
 
-The 0.7.0 CLI provides:
+The 0.8.0 CLI provides:
 
 - `ldr init` to create isolated project-local state
 - Git ignore detection and a clear warning for unignored `.ldr/` directories
@@ -23,6 +23,8 @@ The 0.7.0 CLI provides:
 - explicit orphan-process discovery and cleanup
 - optional `.ldr/project.toml` discovery configuration
 - Cargo, Makefile, and Docker Compose task discovery
+- a global LDR runtime guide with `doctor --fix-agent-guidance` /
+  `--force-agent-guidance` repair for Codex and Claude Code instruction links
 - user-level runtime-store paths
 - Go runtime requirement parsing and resolution (`go.mod` / `go.work`)
 
@@ -60,8 +62,8 @@ then extract and install it:
 
 ```bash
 # Apple Silicon (M1/M2/M3/M4)
-gh release download v0.7.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.7.0_darwin_arm64.tar.gz'
-tar -xzf ldr_0.7.0_darwin_arm64.tar.gz
+gh release download v0.8.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.8.0_darwin_arm64.tar.gz'
+tar -xzf ldr_0.8.0_darwin_arm64.tar.gz
 install -m 0755 ldr "$HOME/bin/ldr"
 ```
 
@@ -166,8 +168,25 @@ ldr cleanup
 ldr cleanup --yes
 ldr doctor
 ldr doctor --json
+ldr doctor -h
+ldr doctor --fix-agent-guidance
+ldr doctor --force-agent-guidance
 ldr alias api gradle.homeops-agent-api.bootRun
 ```
+
+`ldr doctor` checks the current user's `~/.ldr/ldr_runtime_guide.md` and the
+global Codex `~/.codex/AGENTS.md` and Claude Code `~/.claude/CLAUDE.md` for
+their LDR markers. Run `ldr doctor --fix-agent-guidance` to create the runtime
+guide and append links to global instruction files that are missing them. If a
+managed block is damaged but its marker boundaries are intact, use
+`ldr doctor --force-agent-guidance` to restore only that block. Run
+`ldr doctor -h` for details. The guide explains runtime discovery,
+installation, and storage locations. If a start or end marker is missing or
+duplicated, `doctor` reports that automatic repair is unsafe and explains how
+to remove the malformed marker block manually.
+Normal `ldr` startup only suggests that command when it detects a Codex or
+Claude Code environment; it does not modify files. Repository instruction
+files are not changed.
 
 LDR writes process metadata and logs only under `.ldr/state/`.
 
