@@ -44,7 +44,7 @@ Commands:
   ps [--json]        List LDR-managed processes
   stop <process-id> Stop a managed process
   cleanup [--yes]    Find or terminate orphaned processes
-  doctor [--json] [--fix-agent-guidance] Diagnose project and agent runtime guidance
+  doctor [options]    Diagnose project and global agent runtime guidance
   alias [name target] List or create a task alias
   restart <process-id> Restart a managed process
   logs <process-id> Print process logs
@@ -63,6 +63,24 @@ Options:
 
 On first use, LDR creates .ldr/ in the detected project root without blocking.
 Add .ldr/ to your project's .gitignore; LDR warns but never changes it automatically.
+`
+
+const doctorHelp = `LDR environment and global agent runtime guidance diagnostics
+
+Usage:
+  ldr doctor [--json]
+  ldr doctor --fix-agent-guidance
+  ldr doctor --force-agent-guidance
+
+Options:
+  --json                    Print diagnostic checks as JSON
+  --fix-agent-guidance      Add a missing runtime guide or global instruction links
+  --force-agent-guidance    Restore damaged managed blocks with intact marker boundaries
+  --force                   Alias for --force-agent-guidance
+
+The guide is stored at ~/.ldr/ldr_runtime_guide.md. Only global Codex and
+Claude Code instruction files are linked; repository instruction files are
+never changed. Missing or duplicated marker boundaries require manual repair.
 `
 
 type App struct {
@@ -152,12 +170,15 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 			return err
 		}
 		return a.cleanup(ctx, directory, confirm)
+	case args[0] == "doctor" && len(args) == 2 && isHelp(args[1]):
+		_, err := fmt.Fprint(a.out, doctorHelp)
+		return err
 	case args[0] == "doctor":
-		jsonOutput, fixAgentGuidance, err := validateDoctorArgs(args[1:])
+		jsonOutput, fixAgentGuidance, forceAgentGuidance, err := validateDoctorArgs(args[1:])
 		if err != nil {
 			return err
 		}
-		return a.doctor(ctx, directory, jsonOutput, fixAgentGuidance)
+		return a.doctor(ctx, directory, jsonOutput, fixAgentGuidance, forceAgentGuidance)
 	case args[0] == "alias":
 		return a.alias(ctx, directory, args[1:])
 	case args[0] == "restart":
@@ -704,7 +725,7 @@ type doctorCheck struct {
 	Hint    string `json:"hint,omitempty"`
 }
 
-func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentGuidance bool) error {
+func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentGuidance, forceAgentGuidance bool) error {
 	root, err := a.findRoot(directory)
 	if err != nil {
 		return fmt.Errorf("find project root: %w", err)
@@ -715,8 +736,8 @@ func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentG
 		checks = append(checks, doctorCheck{Name: name, Status: status, Message: message, Hint: hint})
 	}
 	var agentFiles []agentguidance.File
-	if fixAgentGuidance {
-		agentFiles, err = agentguidance.AppendMissing()
+	if fixAgentGuidance || forceAgentGuidance {
+		agentFiles, err = agentguidance.Apply(forceAgentGuidance)
 	} else {
 		agentFiles, err = agentguidance.GlobalFiles()
 	}
@@ -727,6 +748,12 @@ func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentG
 			switch {
 			case file.Err != nil:
 				add("agent-guidance", "ERROR", fmt.Sprintf("Cannot inspect %s: %v", file.Name, file.Err), "Check file permissions and run ldr doctor again.")
+			case file.Problem != "":
+				add("agent-guidance", "ERROR", file.Name+": "+file.Problem, "Remove the malformed marker block manually, then run ldr doctor --fix-agent-guidance.")
+			case file.Repaired:
+				add("agent-guidance", "OK", "Restored the managed block in "+file.Name, "")
+			case file.Damaged:
+				add("agent-guidance", "WARN", file.Name+" has a damaged managed block", "Run `ldr doctor --force-agent-guidance` to restore the block while preserving surrounding content.")
 			case file.HasGuidance && file.Added:
 				add("agent-guidance", "OK", "Added "+file.Name, "")
 			case file.HasGuidance:
@@ -1197,24 +1224,29 @@ func validateCleanupArgs(args []string) (bool, error) {
 	return false, fmt.Errorf("usage: ldr cleanup [--yes, -y]")
 }
 
-func validateDoctorArgs(args []string) (jsonOutput, fixAgentGuidance bool, err error) {
+func validateDoctorArgs(args []string) (jsonOutput, fixAgentGuidance, forceAgentGuidance bool, err error) {
 	for _, arg := range args {
 		switch arg {
 		case "--json":
 			if jsonOutput {
-				return false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance]")
+				return false, false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance|--force-agent-guidance]")
 			}
 			jsonOutput = true
 		case "--fix-agent-guidance":
-			if fixAgentGuidance {
-				return false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance]")
+			if fixAgentGuidance || forceAgentGuidance {
+				return false, false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance|--force-agent-guidance]")
 			}
 			fixAgentGuidance = true
+		case "--force-agent-guidance", "--force":
+			if forceAgentGuidance || fixAgentGuidance {
+				return false, false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance|--force-agent-guidance]")
+			}
+			forceAgentGuidance = true
 		default:
-			return false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance]")
+			return false, false, false, fmt.Errorf("usage: ldr doctor [--json] [--fix-agent-guidance|--force-agent-guidance]")
 		}
 	}
-	return jsonOutput, fixAgentGuidance, nil
+	return jsonOutput, fixAgentGuidance, forceAgentGuidance, nil
 }
 
 func isHelp(arg string) bool {
