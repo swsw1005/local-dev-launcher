@@ -166,15 +166,22 @@ ldr cleanup
 ldr cleanup --yes
 ldr doctor
 ldr doctor --json
+ldr doctor -h
 ldr doctor --fix-agent-guidance
+ldr doctor --force-agent-guidance
 ldr alias api gradle.homeops-agent-api.bootRun
 ```
 
 `ldr doctor` checks the current user's `~/.ldr/ldr_runtime_guide.md` and the
 global Codex `~/.codex/AGENTS.md` and Claude Code `~/.claude/CLAUDE.md` for
 their LDR markers. Run `ldr doctor --fix-agent-guidance` to create the runtime
-guide and append links to global instruction files that are missing them.
-The guide explains runtime discovery, installation, and storage locations.
+guide and append links to global instruction files that are missing them. If a
+managed block is damaged but its marker boundaries are intact, use
+`ldr doctor --force-agent-guidance` to restore only that block. Run
+`ldr doctor -h` for details. The guide explains runtime discovery,
+installation, and storage locations. If a start or end marker is missing or
+duplicated, `doctor` reports that automatic repair is unsafe and explains how
+to remove the malformed marker block manually.
 Normal `ldr` startup only suggests that command when it detects a Codex or
 Claude Code environment; it does not modify files. Repository instruction
 files are not changed.

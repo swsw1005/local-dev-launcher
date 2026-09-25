@@ -21,12 +21,19 @@ func main() {
 		}
 		missing := make([]string, 0, 3)
 		for _, file := range agentguidance.DetectedAgentFiles() {
-			if !file.HasGuidance && file.Err == nil {
+			if file.Err != nil {
+				continue
+			}
+			if file.Problem != "" {
+				missing = append(missing, file.Name+" marker boundaries need manual repair")
+			} else if file.Damaged {
+				missing = append(missing, file.Name+" content is damaged")
+			} else if !file.HasGuidance {
 				missing = append(missing, file.Name)
 			}
 		}
 		if len(missing) > 0 {
-			fmt.Fprintf(os.Stderr, "ldr: LDR runtime setup is incomplete (%s). Run `ldr doctor --fix-agent-guidance` to create the guide and add missing links.\n", strings.Join(missing, ", "))
+			fmt.Fprintf(os.Stderr, "ldr: LDR runtime setup needs attention (%s). Run `ldr doctor -h` for repair instructions.\n", strings.Join(missing, ", "))
 		}
 	}()
 
