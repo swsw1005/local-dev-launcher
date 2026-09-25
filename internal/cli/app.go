@@ -735,38 +735,6 @@ func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentG
 	add := func(name, status, message, hint string) {
 		checks = append(checks, doctorCheck{Name: name, Status: status, Message: message, Hint: hint})
 	}
-	var agentFiles []agentguidance.File
-	if fixAgentGuidance || forceAgentGuidance {
-		agentFiles, err = agentguidance.Apply(forceAgentGuidance)
-	} else {
-		agentFiles, err = agentguidance.GlobalFiles()
-	}
-	if err != nil {
-		add("agent-guidance", "ERROR", err.Error(), "Check that the global agent instruction directories are accessible.")
-	} else {
-		for _, file := range agentFiles {
-			switch {
-			case file.Err != nil:
-				add("agent-guidance", "ERROR", fmt.Sprintf("Cannot inspect %s: %v", file.Name, file.Err), "Check file permissions and run ldr doctor again.")
-			case file.Problem != "":
-				add("agent-guidance", "ERROR", file.Name+": "+file.Problem, "Remove the malformed marker block manually, then run ldr doctor --fix-agent-guidance.")
-			case file.Repaired:
-				add("agent-guidance", "OK", "Restored the managed block in "+file.Name, "")
-			case file.Damaged:
-				add("agent-guidance", "WARN", file.Name+" has a damaged managed block", "Run `ldr doctor --force-agent-guidance` to restore the block while preserving surrounding content.")
-			case file.HasGuidance && file.Added:
-				add("agent-guidance", "OK", "Added "+file.Name, "")
-			case file.HasGuidance:
-				add("agent-guidance", "OK", file.Name+" contains its LDR marker", "")
-			default:
-				message := file.Name + " is missing its LDR marker"
-				if file.Name != "LDR runtime guide" {
-					message = file.Name + " is missing a link to the LDR runtime guide"
-				}
-				add("agent-guidance", "WARN", message, "Run `ldr doctor --fix-agent-guidance` to create the guide and append missing links.")
-			}
-		}
-	}
 	if config, err := project.LoadConfig(root); err != nil {
 		add("project-config", "ERROR", err.Error(), "Fix .ldr/project.toml and run ldr doctor again.")
 	} else if config.DefaultProfile != "" {
@@ -814,6 +782,38 @@ func (a App) doctor(ctx context.Context, directory string, jsonOutput, fixAgentG
 		add("runtimes", "WARN", err.Error(), "Run ldr runtime list or install a required runtime.")
 	} else {
 		add("runtimes", "OK", fmt.Sprintf("%d installed runtime family(ies)", len(installed)), "")
+	}
+	var agentFiles []agentguidance.File
+	if fixAgentGuidance || forceAgentGuidance {
+		agentFiles, err = agentguidance.Apply(forceAgentGuidance)
+	} else {
+		agentFiles, err = agentguidance.GlobalFiles()
+	}
+	if err != nil {
+		add("agent-guidance", "ERROR", err.Error(), "Check that the global agent instruction directories are accessible.")
+	} else {
+		for _, file := range agentFiles {
+			switch {
+			case file.Err != nil:
+				add("agent-guidance", "ERROR", fmt.Sprintf("Cannot inspect %s: %v", file.Name, file.Err), "Check file permissions and run ldr doctor again.")
+			case file.Problem != "":
+				add("agent-guidance", "ERROR", file.Name+": "+file.Problem, "Remove the malformed marker block manually, then run ldr doctor --fix-agent-guidance.")
+			case file.Repaired:
+				add("agent-guidance", "OK", "Restored the managed block in "+file.Name, "")
+			case file.Damaged:
+				add("agent-guidance", "WARN", file.Name+" has a damaged managed block", "Run `ldr doctor --force-agent-guidance` to restore the block while preserving surrounding content.")
+			case file.HasGuidance && file.Added:
+				add("agent-guidance", "OK", "Added "+file.Name, "")
+			case file.HasGuidance:
+				add("agent-guidance", "OK", file.Name+" contains its LDR marker", "")
+			default:
+				message := file.Name + " is missing its LDR marker"
+				if file.Name != "LDR runtime guide" {
+					message = file.Name + " is missing a link to the LDR runtime guide"
+				}
+				add("agent-guidance", "WARN", message, "Run `ldr doctor --fix-agent-guidance` to create the guide and append missing links.")
+			}
+		}
 	}
 	if jsonOutput {
 		return json.NewEncoder(a.out).Encode(checks)
