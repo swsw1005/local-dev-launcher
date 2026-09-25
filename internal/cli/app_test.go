@@ -285,6 +285,76 @@ func TestDoctorOutputsJSONWithoutCreatingState(t *testing.T) {
 	}
 }
 
+func TestDoctorFixAgentGuidanceCreatesGlobalGuideAndLinks(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+
+	if err := app.Run(context.Background(), []string{"doctor", "--fix-agent-guidance", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	var checks []doctorCheck
+	if err := json.Unmarshal(out.Bytes(), &checks); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range checks {
+		if c.Name == "agent-guidance" && c.Status == "ERROR" {
+			t.Fatalf("unexpected agent-guidance error: %+v", c)
+		}
+		if c.Name == "agent-guidance" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no agent-guidance checks in %+v", checks)
+	}
+	guidePath := filepath.Join(home, ".ldr", "ldr_runtime_guide.md")
+	if _, err := os.Stat(guidePath); err != nil {
+		t.Fatalf("guide not created: %v", err)
+	}
+	claudePath := filepath.Join(home, ".claude", "CLAUDE.md")
+	content, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatalf("Claude Code link not created: %v", err)
+	}
+	if !strings.Contains(string(content), "ldr:runtime-guide-link:v1") {
+		t.Fatalf("Claude Code file missing link marker: %q", content)
+	}
+}
+
+func TestDoctorForceAgentGuidanceRepairsDamagedBlock(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	guidePath := filepath.Join(home, ".ldr", "ldr_runtime_guide.md")
+	if err := os.MkdirAll(filepath.Dir(guidePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	damaged := "keep-before\n<!-- ldr:runtime-guide:v1 -->\nstale\n<!-- /ldr:runtime-guide -->\nkeep-after\n"
+	if err := os.WriteFile(guidePath, []byte(damaged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+
+	if err := app.Run(context.Background(), []string{"doctor", "--force-agent-guidance", "--json"}, root); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(guidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(content), "keep-before\n") || !strings.HasSuffix(string(content), "keep-after\n") {
+		t.Fatalf("surrounding content not preserved: %q", content)
+	}
+	if strings.Contains(string(content), "stale") {
+		t.Fatalf("stale content not repaired: %q", content)
+	}
+}
+
 func TestRunReportsMissingTask(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
