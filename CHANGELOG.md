@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0 — 2026-10-05
+
+- Added replacement suggestions and confirmed rebasing for broken profiles.
+- Added JSON execution results and process log output for agent integrations.
+
 ## 0.8.0 — 2026-09-26
 
 - Added a global LDR runtime guide (`~/.ldr/ldr_runtime_guide.md`) covering

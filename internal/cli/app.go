@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -28,7 +29,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -39,7 +40,7 @@ Commands:
   init [--yes, -y]  Create project-local .ldr state
   list [--json] [--recent] [--search query] List discovered runnable tasks
   refresh           Rebuild the discovery cache
-  run <task-id>     Run a discovered task
+  run <task-id> [--json] Run a task; --json captures output and exit status
   start <task-id>   Start a task in the background
   ps [--json]        List LDR-managed processes
   stop <process-id> Stop a managed process
@@ -47,11 +48,11 @@ Commands:
   doctor [options]    Diagnose project and global agent runtime guidance
   alias [name target] List or create a task alias
   restart <process-id> Restart a managed process
-  logs <process-id> Print process logs
+  logs <process-id> [--json] Print process logs
   install ...       Install or update shared Java, Node, and Go runtimes
   runtime ...       Search, list, or activate managed runtimes
   init-shell        Configure shared Bash/Zsh PATH and optional banner support
-  profile ...       Create and inspect user execution profiles
+  profile ...       Create, inspect, and rebase user execution profiles
   tui               Open the interactive task launcher
   help              Show this help
   version           Show the LDR version
@@ -144,10 +145,13 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 	case len(args) == 1 && args[0] == "refresh":
 		return a.list(ctx, directory, false, "", false, true)
 	case args[0] == "run":
-		if len(args) != 2 {
-			return errors.New("usage: ldr run <task-id>")
+		if len(args) == 3 && args[2] == "--json" {
+			return a.run(ctx, directory, args[1], true)
 		}
-		return a.run(ctx, directory, args[1])
+		if len(args) == 2 {
+			return a.run(ctx, directory, args[1], false)
+		}
+		return errors.New("usage: ldr run <task-id> [--json]")
 	case args[0] == "start":
 		if len(args) != 2 {
 			return errors.New("usage: ldr start <task-id-or-profile>")
@@ -187,10 +191,13 @@ func (a App) Run(ctx context.Context, args []string, directory string) error {
 		}
 		return a.restart(ctx, directory, args[1])
 	case args[0] == "logs":
-		if len(args) != 2 {
-			return errors.New("usage: ldr logs <process-id>")
+		if len(args) == 3 && args[2] == "--json" {
+			return a.logs(ctx, directory, args[1], true)
 		}
-		return a.logs(ctx, directory, args[1])
+		if len(args) == 2 {
+			return a.logs(ctx, directory, args[1], false)
+		}
+		return errors.New("usage: ldr logs <process-id> [--json]")
 	case args[0] == "profile":
 		return a.profile(ctx, directory, args[1:])
 	case len(args) == 1 && args[0] == "tui":
@@ -598,23 +605,69 @@ func newForegroundLog(layout state.Layout, taskID string) (*os.File, string, err
 	return file, path, nil
 }
 
-func (a App) run(ctx context.Context, directory, taskID string) error {
-	if err := a.initialize(ctx, directory, false); err != nil {
+type runResult struct {
+	TaskID   string `json:"taskId"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exitCode"`
+	Error    string `json:"error,omitempty"`
+}
+
+func (a App) run(ctx context.Context, directory, taskID string, jsonOutput bool) error {
+	if err := a.initialize(ctx, directory, jsonOutput); err != nil {
+		if jsonOutput {
+			return a.encodeRunFailure(taskID, err)
+		}
 		return err
 	}
 	root, err := a.findRoot(directory)
 	if err != nil {
-		return fmt.Errorf("find project root: %w", err)
+		err = fmt.Errorf("find project root: %w", err)
+		if jsonOutput {
+			return a.encodeRunFailure(taskID, err)
+		}
+		return err
 	}
 	task, options, err := a.resolveRunnable(root, taskID)
 	if err != nil {
+		if jsonOutput {
+			return a.encodeRunFailure(taskID, err)
+		}
 		return err
 	}
-	err = execution.RunWithOptions(ctx, root, task, a.out, a.errOut, options)
+	var stdout, stderr io.Writer = a.out, a.errOut
+	var capturedOut, capturedErr strings.Builder
+	if jsonOutput {
+		stdout, stderr = &capturedOut, &capturedErr
+	}
+	err = execution.RunWithOptions(ctx, root, task, stdout, stderr, options)
+	if jsonOutput {
+		result := runResult{TaskID: task.ID, Stdout: capturedOut.String(), Stderr: capturedErr.String()}
+		if err != nil {
+			result.Error = err.Error()
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				result.ExitCode = exitErr.ExitCode()
+			} else {
+				result.ExitCode = 1
+			}
+		}
+		if encodeErr := json.NewEncoder(a.out).Encode(result); encodeErr != nil {
+			return encodeErr
+		}
+	}
 	if err == nil {
 		_ = recordRecent(root, task.ID)
 	}
 	return err
+}
+
+func (a App) encodeRunFailure(taskID string, runErr error) error {
+	result := runResult{TaskID: taskID, ExitCode: 1, Error: runErr.Error()}
+	if err := json.NewEncoder(a.out).Encode(result); err != nil {
+		return err
+	}
+	return runErr
 }
 
 func (a App) start(ctx context.Context, directory, taskID string) error {
@@ -906,7 +959,7 @@ func (a App) restart(ctx context.Context, directory, processID string) error {
 	return nil
 }
 
-func (a App) logs(ctx context.Context, directory, processID string) error {
+func (a App) logs(ctx context.Context, directory, processID string, jsonOutput bool) error {
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
 	}
@@ -917,6 +970,12 @@ func (a App) logs(ctx context.Context, directory, processID string) error {
 	contents, err := process.New(state.NewLayout(root)).Logs(processID)
 	if err != nil {
 		return err
+	}
+	if jsonOutput {
+		return json.NewEncoder(a.out).Encode(struct {
+			ProcessID string `json:"processId"`
+			Contents  string `json:"contents"`
+		}{processID, string(contents)})
 	}
 	_, err = a.out.Write(contents)
 	return err
@@ -961,7 +1020,7 @@ func (a App) resolveRunnable(root, taskID string) (domain.Task, execution.Option
 
 func (a App) profile(ctx context.Context, directory string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ldr profile <clone|list|show>")
+		return errors.New("usage: ldr profile <clone|list|show|rebase>")
 	}
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
@@ -1022,7 +1081,25 @@ func (a App) profile(ctx context.Context, directory string, args []string) error
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.out, "Name: %s\nExtends: %s\n", loaded.Name, loaded.Extends)
+		result, err := discovery.LoadOrDiscover(root, layout, false)
+		if err != nil {
+			return err
+		}
+		status := "READY"
+		if !hasTask(result.Tasks, loaded.Extends) {
+			status = "BROKEN"
+		}
+		fmt.Fprintf(a.out, "Name: %s\nExtends: %s\nStatus: %s\n", loaded.Name, loaded.Extends, status)
+		if status == "BROKEN" {
+			candidates := similarTasks(result.Tasks, loaded.Extends)
+			if len(candidates) > 0 {
+				fmt.Fprintln(a.out, "Possible replacements:")
+				for _, candidate := range candidates {
+					fmt.Fprintf(a.out, "  %s\n", candidate.ID)
+				}
+				fmt.Fprintf(a.out, "Choose one with `ldr profile rebase %s <task-id> --yes`.\n", loaded.Name)
+			}
+		}
 		if len(loaded.EnvFrom) > 0 {
 			fmt.Fprintf(a.out, "Environment files: %s\n", strings.Join(loaded.EnvFrom, ", "))
 		}
@@ -1037,9 +1114,60 @@ func (a App) profile(ctx context.Context, directory string, args []string) error
 			}
 		}
 		return nil
+	case "rebase":
+		if len(args) != 4 || args[3] != "--yes" {
+			return errors.New("usage: ldr profile rebase <profile-name> <task-id> --yes")
+		}
+		loaded, err := profile.LoadByName(layout.Profiles, args[1])
+		if err != nil {
+			return err
+		}
+		result, err := discovery.LoadOrDiscover(root, layout, false)
+		if err != nil {
+			return err
+		}
+		if !hasTask(result.Tasks, args[2]) {
+			return fmt.Errorf("replacement task %q was not found; run `ldr list`", args[2])
+		}
+		old := loaded.Extends
+		loaded.Extends = args[2]
+		filename, err := profile.Filename(loaded.Name)
+		if err != nil {
+			return fmt.Errorf("invalid profile name in %q: %w", args[1], err)
+		}
+		if loaded.Name != args[1] {
+			return fmt.Errorf("profile file %q declares a different name %q", args[1], loaded.Name)
+		}
+		if err := profile.Save(filepath.Join(layout.Profiles, filename), loaded); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "Rebased profile %q: %s -> %s\n", loaded.Name, old, loaded.Extends)
+		return nil
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
+}
+
+func similarTasks(tasks []domain.Task, missing string) []domain.Task {
+	parts := strings.Split(missing, ".")
+	query := missing
+	if len(parts) > 0 {
+		query = parts[len(parts)-1]
+	}
+	if query == "" {
+		return nil
+	}
+	matches := search.Tasks(tasks, query)
+	result := make([]domain.Task, 0, 3)
+	for _, match := range matches {
+		if match.Task.ID != missing {
+			result = append(result, match.Task)
+		}
+		if len(result) == 3 {
+			break
+		}
+	}
+	return result
 }
 
 func hasTask(tasks []domain.Task, taskID string) bool {
