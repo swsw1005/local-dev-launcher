@@ -29,7 +29,7 @@ import (
 	"github.com/swsw1005/local-dev-launcher/internal/tui"
 )
 
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 const helpText = `Local Dev Runner (LDR)
 
@@ -615,14 +615,24 @@ type runResult struct {
 
 func (a App) run(ctx context.Context, directory, taskID string, jsonOutput bool) error {
 	if err := a.initialize(ctx, directory, jsonOutput); err != nil {
+		if jsonOutput {
+			return a.encodeRunFailure(taskID, err)
+		}
 		return err
 	}
 	root, err := a.findRoot(directory)
 	if err != nil {
-		return fmt.Errorf("find project root: %w", err)
+		err = fmt.Errorf("find project root: %w", err)
+		if jsonOutput {
+			return a.encodeRunFailure(taskID, err)
+		}
+		return err
 	}
 	task, options, err := a.resolveRunnable(root, taskID)
 	if err != nil {
+		if jsonOutput {
+			return a.encodeRunFailure(taskID, err)
+		}
 		return err
 	}
 	var stdout, stderr io.Writer = a.out, a.errOut
@@ -650,6 +660,14 @@ func (a App) run(ctx context.Context, directory, taskID string, jsonOutput bool)
 		_ = recordRecent(root, task.ID)
 	}
 	return err
+}
+
+func (a App) encodeRunFailure(taskID string, runErr error) error {
+	result := runResult{TaskID: taskID, ExitCode: 1, Error: runErr.Error()}
+	if err := json.NewEncoder(a.out).Encode(result); err != nil {
+		return err
+	}
+	return runErr
 }
 
 func (a App) start(ctx context.Context, directory, taskID string) error {
@@ -1002,7 +1020,7 @@ func (a App) resolveRunnable(root, taskID string) (domain.Task, execution.Option
 
 func (a App) profile(ctx context.Context, directory string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ldr profile <clone|list|show>")
+		return errors.New("usage: ldr profile <clone|list|show|rebase>")
 	}
 	if err := a.initialize(ctx, directory, false); err != nil {
 		return err
@@ -1113,7 +1131,13 @@ func (a App) profile(ctx context.Context, directory string, args []string) error
 		}
 		old := loaded.Extends
 		loaded.Extends = args[2]
-		filename, _ := profile.Filename(loaded.Name)
+		filename, err := profile.Filename(loaded.Name)
+		if err != nil {
+			return fmt.Errorf("invalid profile name in %q: %w", args[1], err)
+		}
+		if loaded.Name != args[1] {
+			return fmt.Errorf("profile file %q declares a different name %q", args[1], loaded.Name)
+		}
 		if err := profile.Save(filepath.Join(layout.Profiles, filename), loaded); err != nil {
 			return err
 		}

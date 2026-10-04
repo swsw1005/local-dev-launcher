@@ -1,4 +1,4 @@
-# Local Dev Runner (LDR) 0.8.0
+# Local Dev Runner (LDR) 0.9.0
 
 Local Dev Runner is a terminal-first local development runner. It is designed
 to discover project tasks and provide one execution model for developers,
@@ -10,7 +10,7 @@ Discover → Resolve → Run → Manage
 
 ## Status
 
-The 0.8.0 CLI provides:
+The 0.9.0 CLI provides:
 
 - `ldr init` to create isolated project-local state
 - Git ignore detection and a clear warning for unignored `.ldr/` directories
@@ -62,8 +62,8 @@ then extract and install it:
 
 ```bash
 # Apple Silicon (M1/M2/M3/M4)
-gh release download v0.8.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.8.0_darwin_arm64.tar.gz'
-tar -xzf ldr_0.8.0_darwin_arm64.tar.gz
+gh release download v0.9.0 --repo swsw1005/local-dev-launcher --pattern 'ldr_0.9.0_darwin_arm64.tar.gz'
+tar -xzf ldr_0.9.0_darwin_arm64.tar.gz
 install -m 0755 ldr "$HOME/bin/ldr"
 ```
 
@@ -231,10 +231,11 @@ broken profile. After choosing a replacement, explicitly confirm the change:
 ldr profile rebase backend-local gradle.homeops-agent-api.bootRun --yes
 ```
 
-For agents and scripts, `ldr run <task-id> --json` captures stdout and stderr
-into one JSON object with the task ID, exit code, and error (when execution
-fails). `ldr logs <process-id> --json` returns the process ID and log contents
-as JSON. The existing plain text forms remain available.
+For agents and scripts, `ldr run <task-id> --json` returns one JSON object
+with the task ID, stdout, stderr, exit code, and error. Initialization, task
+resolution, and execution failures are represented in that object too.
+`ldr logs <process-id> --json` returns the process ID and log contents as JSON.
+The existing plain text forms remain available.
 
 ## Project Configuration
 

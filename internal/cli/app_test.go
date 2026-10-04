@@ -437,6 +437,26 @@ func TestRunReportsMissingTask(t *testing.T) {
 	}
 }
 
+func TestRunJSONEncodesTaskResolutionFailure(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	err := app.Run(context.Background(), []string{"run", "node.root.missing", "--json"}, root)
+	if err == nil || !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("run error = %v", err)
+	}
+	var result runResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("JSON output %q: %v", out.String(), err)
+	}
+	if result.TaskID != "node.root.missing" || result.ExitCode != 1 || result.Error == "" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestProfileCloneAndList(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite"}}`), 0o644); err != nil {
