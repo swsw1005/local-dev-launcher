@@ -97,6 +97,7 @@ ldr list --search boot --json
 ldr list --recent
 ldr refresh
 ldr run gradle.homeops-agent-api.bootRun
+ldr run gradle.homeops-agent-api.bootRun --json
 ldr start gradle.homeops-agent-api.bootRun
 ldr ps
 ldr tui
@@ -162,6 +163,7 @@ ldr start gradle.homeops-agent-api.bootRun
 ldr ps
 ldr ps --json
 ldr logs <process-id>
+ldr logs <process-id> --json
 ldr stop <process-id>
 ldr restart <process-id>
 ldr cleanup
@@ -222,6 +224,17 @@ base task rather than duplicating its command. Profile TOML supports
 `append` arrays. Environment precedence is shell, env files in declaration
 order, then explicit profile values. `profile show` masks values. A profile
 whose base task disappears remains on disk and is shown as `BROKEN`.
+`ldr profile show <name>` suggests up to three similar discovered tasks for a
+broken profile. After choosing a replacement, explicitly confirm the change:
+
+```bash
+ldr profile rebase backend-local gradle.homeops-agent-api.bootRun --yes
+```
+
+For agents and scripts, `ldr run <task-id> --json` captures stdout and stderr
+into one JSON object with the task ID, exit code, and error (when execution
+fails). `ldr logs <process-id> --json` returns the process ID and log contents
+as JSON. The existing plain text forms remain available.
 
 ## Project Configuration
 
