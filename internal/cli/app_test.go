@@ -12,6 +12,7 @@ import (
 
 	"github.com/swsw1005/local-dev-launcher/internal/gitignore"
 	"github.com/swsw1005/local-dev-launcher/internal/process"
+	"github.com/swsw1005/local-dev-launcher/internal/profile"
 	"github.com/swsw1005/local-dev-launcher/internal/state"
 )
 
@@ -19,6 +20,74 @@ type stubGit struct{ status gitignore.Status }
 
 func (s stubGit) InsideWorkTree(context.Context, string) (bool, error) {
 	return s.status.InRepository, nil
+}
+
+func TestBrokenProfileSuggestsReplacementAndRebaseRequiresConfirmation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"vite","develop":"vite"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	if err := app.initialize(context.Background(), root, true); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(root, ".ldr", "profiles", "frontend.toml")
+	if err := profile.Save(profilePath, profile.Profile{Version: profile.Version, Name: "frontend", Extends: "node.root.deev", Env: map[string]string{"TOKEN": "secret"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run(context.Background(), []string{"profile", "show", "frontend"}, root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Status: BROKEN") || !strings.Contains(out.String(), "node.root.dev") || strings.Contains(out.String(), "secret") {
+		t.Fatalf("show output = %q", out.String())
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"profile", "rebase", "frontend", "node.root.dev"}, root); err == nil {
+		t.Fatal("rebase without confirmation succeeded")
+	}
+	if err := app.Run(context.Background(), []string{"profile", "rebase", "frontend", "node.root.dev", "--yes"}, root); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := profile.Load(profilePath)
+	if err != nil || loaded.Extends != "node.root.dev" || loaded.Env["TOKEN"] != "secret" {
+		t.Fatalf("rebased profile = %#v, err=%v", loaded, err)
+	}
+}
+
+func TestRunJSONCapturesOutputAndExitCode(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"dev":"ignored"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := filepath.Join(t.TempDir(), "runtimes")
+	bin := filepath.Join(store, "node", "24", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"node", "npm"} {
+		contents := "#!/bin/sh\nprintf 'stdout-value\\n'\nprintf 'stderr-value\\n' >&2\nexit 7\n"
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(contents), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("LDR_RUNTIME_HOME", store)
+	var out, errOut bytes.Buffer
+	app := App{out: &out, errOut: &errOut, git: stubGit{}, findRoot: func(string) (string, error) { return root, nil }, version: Version}
+	err := app.Run(context.Background(), []string{"run", "node.root.dev", "--json"}, root)
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("run error = %v", err)
+	}
+	var result runResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("JSON output %q: %v", out.String(), err)
+	}
+	if result.TaskID != "node.root.dev" || result.Stdout != "stdout-value\n" || result.Stderr != "stderr-value\n" || result.ExitCode != 7 || result.Error == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("stderr leaked outside JSON: %s", errOut.String())
+	}
 }
 func (s stubGit) IsIgnored(context.Context, string, string) (bool, error) {
 	return s.status.Ignored, nil
