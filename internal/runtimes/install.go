@@ -64,10 +64,13 @@ func NewInstaller() Installer {
 }
 
 // Install downloads and atomically places selected runtimes in LDR's shared
-// store. It is intentionally macOS-only for this release.
+// store on supported macOS and Linux architectures.
 func (i Installer) Install(ctx context.Context, request InstallRequest) ([]InstalledRuntime, error) {
-	if i.GOOS != "darwin" {
-		return nil, fmt.Errorf("runtime installation is currently supported on macOS only")
+	if i.GOOS != "darwin" && i.GOOS != "linux" {
+		return nil, fmt.Errorf("runtime installation is supported on macOS and Linux only")
+	}
+	if i.GOARCH != "amd64" && i.GOARCH != "arm64" {
+		return nil, fmt.Errorf("unsupported runtime architecture %q", i.GOARCH)
 	}
 	if i.Client == nil {
 		i.Client = &http.Client{Timeout: 2 * time.Minute}
@@ -215,15 +218,19 @@ func (i Installer) installNode(ctx context.Context, store string, request Instal
 		if request.LTS && string(release.LTS) == "false" {
 			continue
 		}
-		archiveName := "osx-arm64-tar"
+		archiveOS := "osx"
+		if i.GOOS == "linux" {
+			archiveOS = "linux"
+		}
+		archiveName := archiveOS + "-arm64-tar"
 		if i.GOARCH == "amd64" {
-			archiveName = "osx-x64-tar"
+			archiveName = archiveOS + "-x64-tar"
 		}
 		if !containsString(release.Files, archiveName) {
 			if request.LTS {
 				continue
 			}
-			return nil, fmt.Errorf("Node %d has no macOS %s archive", major, i.GOARCH)
+			return nil, fmt.Errorf("Node %d has no %s %s archive", major, i.GOOS, i.GOARCH)
 		}
 		selected[major] = release
 		if request.Version != "" || (!request.LTS && request.Version == "") {
@@ -244,7 +251,7 @@ func (i Installer) installNode(ctx context.Context, store string, request Instal
 	var installed []InstalledRuntime
 	for _, major := range majors {
 		release := selected[major]
-		file := "node-" + release.Version + "-darwin-" + arch + ".tar.gz"
+		file := "node-" + release.Version + "-" + i.GOOS + "-" + arch + ".tar.gz"
 		base := "https://nodejs.org/dist/" + release.Version + "/"
 		checksum, err := i.nodeChecksum(ctx, base+"SHASUMS256.txt", file)
 		if err != nil {
@@ -308,9 +315,13 @@ func (i Installer) installJava(ctx context.Context, store string, request Instal
 	if i.GOARCH == "amd64" {
 		arch = "x64"
 	}
+	javaOS, javaHome := "mac", "Contents/Home/bin/java"
+	if i.GOOS == "linux" {
+		javaOS, javaHome = "linux", "bin/java"
+	}
 	var installed []InstalledRuntime
 	for _, major := range majors {
-		endpoint := fmt.Sprintf("https://api.adoptium.net/v3/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=mac&vendor=eclipse", major, arch)
+		endpoint := fmt.Sprintf("https://api.adoptium.net/v3/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=%s&vendor=eclipse", major, arch, javaOS)
 		var assets []adoptiumAsset
 		if err := i.getJSON(ctx, endpoint, &assets); err != nil {
 			if request.LTS {
@@ -322,9 +333,9 @@ func (i Installer) installJava(ctx context.Context, store string, request Instal
 			if request.LTS {
 				continue
 			}
-			return installed, fmt.Errorf("Java %d has no macOS %s archive", major, arch)
+			return installed, fmt.Errorf("Java %d has no %s %s archive", major, i.GOOS, arch)
 		}
-		item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "java", Family: strconv.Itoa(major), Version: strconv.Itoa(major), URL: assets[0].Binary.Package.Link, SHA256: assets[0].Binary.Package.Checksum, Home: "Contents/Home/bin/java"})
+		item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "java", Family: strconv.Itoa(major), Version: strconv.Itoa(major), URL: assets[0].Binary.Package.Link, SHA256: assets[0].Binary.Package.Checksum, Home: javaHome})
 		if err != nil {
 			return installed, err
 		}
@@ -386,7 +397,7 @@ func (i Installer) installGo(ctx context.Context, store string, request InstallR
 			continue
 		}
 		for _, file := range release.Files {
-			if file.OS != "darwin" || file.Arch != i.GOARCH || file.Kind != "archive" {
+			if file.OS != i.GOOS || file.Arch != i.GOARCH || file.Kind != "archive" {
 				continue
 			}
 			item, err := i.installArchive(ctx, store, archiveRelease{Runtime: "go", Family: version.Family(), Version: release.Version, URL: "https://go.dev/dl/" + file.Filename, SHA256: file.SHA256, Home: "bin/go"})

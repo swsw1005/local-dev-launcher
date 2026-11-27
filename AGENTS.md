@@ -44,6 +44,11 @@ instead of repository state. Before opening a PR, run `go test ./...`,
 
 ## Commits and Pull Requests
 
+Never use a personal email address in commit or tag metadata. Use the GitHub
+account's `users.noreply.github.com` address for Git author, committer, and
+tagger identities. Configure the repository's `user.email` accordingly before
+creating commits or annotated tags.
+
 Use concise imperative commit subjects with a conventional prefix, for example
 `feat: add task search` or `fix: reconcile stale process state`. PRs should
 describe behavior, compatibility impact, and validation commands; link the
@@ -77,7 +82,8 @@ Release, and update release information in `swsw1005/home-tab`.
 Run `gofmt`, `go test ./...`, `git diff --check`, and a clean `CGO_ENABLED=0`
 build. For releases, build both `darwin_arm64` and `darwin_amd64`, verify the
 native archive with `ldr --version`, and validate every archive with the
-generated SHA-256 file.
+generated SHA-256 file. Publish signed Linux packages as described in
+`docs/linux-packaging.md` and verify installation and updates.
 
 ## Releases
 

@@ -26,13 +26,19 @@ ldr_prepend_path() {
   esac
 }
 ldr_prepend_path "$HOME/bin"
-ldr_prepend_path "/opt/homebrew/bin"
+[ "$(uname -s)" != Darwin ] || ldr_prepend_path "/opt/homebrew/bin"
 ldr_prepend_path "$HOME/.local/bin"
 ldr_dedupe_path
 export PATH
 unset -f ldr_prepend_path ldr_dedupe_path 2>/dev/null || true
 
-LDR_SHELL_HOME="$HOME/Library/Application Support/local-dev-runner/shell"
+if [ -n "${LDR_RUNTIME_HOME:-}" ]; then
+  LDR_SHELL_HOME="${LDR_RUNTIME_HOME%/*}/shell"
+elif [ "$(uname -s)" = Darwin ]; then
+  LDR_SHELL_HOME="$HOME/Library/Application Support/local-dev-runner/shell"
+else
+  LDR_SHELL_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/local-dev-runner/shell"
+fi
 if [ -f "$LDR_SHELL_HOME/banner.sh" ]; then
   . "$LDR_SHELL_HOME/banner.sh"
   case "$-" in

@@ -230,7 +230,7 @@ Examples:
   ldr install go --list 1.26
 
 Runtimes are installed below the LDR user runtime store. Installation currently
-supports macOS arm64 and Intel Macs.
+supports macOS and Linux on arm64 and amd64.
 `
 
 func (a App) install(ctx context.Context, args []string) error {

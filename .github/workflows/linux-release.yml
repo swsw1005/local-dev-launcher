@@ -1,0 +1,64 @@
+name: Linux packages
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-package-repository
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      SIGNING_KEY: ${{ secrets.LDR_REPOSITORY_SIGNING_KEY }}
+      SIGNING_PASSPHRASE: ${{ secrets.LDR_REPOSITORY_SIGNING_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils createrepo-c
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0
+      - name: Build signed packages and repositories
+        run: bash packaging/publish-linux.sh
+      - name: Test package installation
+        run: |
+          docker run --rm -v "$PWD/repository:/repo:ro" ubuntu:24.04 bash -ec \
+            'printf "deb [signed-by=/repo/ldr-signing-key.asc] file:/repo/apt ./\n" > /etc/apt/sources.list.d/ldr.list; apt-get update -qq; apt-get install -y ldr; ldr --version; apt-get remove -y ldr'
+          docker run --rm -v "$PWD/repository:/repo:ro" fedora:latest bash -ec \
+            'printf "[ldr]\nname=ldr\nbaseurl=file:///repo/rpm\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file:///repo/ldr-signing-key.asc\n" > /etc/yum.repos.d/ldr.repo; dnf install -y ldr; ldr --version; dnf remove -y ldr'
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/*.deb dist/*.rpm dist/*linux*SHA256SUMS.txt --clobber
+      - name: Publish package repository
+        run: |
+          git -C repository config http.https://github.com/.extraheader "$(git config --get http.https://github.com/.extraheader)"
+          git -C repository config user.name github-actions\[bot\]
+          git -C repository config user.email 41898282+github-actions\[bot\]@users.noreply.github.com
+          git -C repository add .
+          if ! git -C repository diff --cached --quiet; then
+            git -C repository commit -m "Publish Linux packages for $TAG"
+            git -C repository push origin HEAD:gh-pages
+          fi
