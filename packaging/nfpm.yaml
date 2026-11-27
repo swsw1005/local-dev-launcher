@@ -1,0 +1,21 @@
+name: ldr
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+maintainer: Local Dev Runner contributors
+description: Runtime-aware local development task launcher
+homepage: https://github.com/swsw1005/local-dev-launcher
+license: MIT
+contents:
+  - src: dist/ldr-linux
+    dst: /usr/bin/ldr
+    file_info:
+      mode: 0755
+  - src: LICENSE
+    dst: /usr/share/doc/ldr/copyright
+    type: license
+  - src: dist/THIRD_PARTY_LICENSES
+    dst: /usr/share/doc/ldr/THIRD_PARTY_LICENSES
+rpm:
+  signature:
+    key_file: ${SIGNING_KEY_FILE}

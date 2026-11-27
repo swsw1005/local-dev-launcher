@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added Linux runtime installation for Java, Node, and Go on amd64 and arm64.
+- Added signed APT and RPM package publishing automation.
+- Added an MIT license for LDR.
+
 ## 0.9.0 — 2026-10-05
 
 - Added replacement suggestions and confirmed rebasing for broken profiles.

@@ -29,9 +29,10 @@ The 0.9.0 CLI provides:
 - Go runtime requirement parsing and resolution (`go.mod` / `go.work`)
 
 Gradle, Maven, Node, and Go task discovery, the Finder-style TUI, and
-long-running process management are available on macOS.
+long-running process management are available on macOS and Linux.
 
-LDR can also download and update the Java, Node, and Go runtimes it resolves.
+LDR can also download and update the Java, Node, and Go runtimes it resolves
+on macOS and Linux (amd64 and arm64).
 Run `ldr install --help` for the runtime installer commands.
 
 Go installs can use `ldr install go latest`, an exact release such as
@@ -67,8 +68,7 @@ tar -xzf ldr_0.9.0_darwin_arm64.tar.gz
 install -m 0755 ldr "$HOME/bin/ldr"
 ```
 
-For Intel Macs, replace `darwin_arm64` with `darwin_amd64`. The repository is
-private, so `gh auth login` is required for the command above; downloading the
+For Intel Macs, replace `darwin_arm64` with `darwin_amd64`. Downloading the
 release asset in GitHub's browser UI works as well.
 
 If `~/bin` is not on your PATH, add this to your shell configuration:
@@ -281,9 +281,11 @@ installed patch meets an older patch-level minimum. The detailed policy is in
 
 ## Platform support
 
-The current development and installation flow has been verified on macOS.
-The code has platform-aware runtime-store defaults for macOS, Linux, and
-Windows, but those operating systems have not yet been tested end-to-end.
+The runtime installer supports macOS and Linux on amd64 and arm64. Linux
+packages and signed APT and RPM repositories can be published by the GitHub
+Actions workflow described in [the Linux packaging guide](docs/linux-packaging.md).
+Windows has platform-aware runtime-store defaults but has not been tested
+end-to-end.
 
 ## Development
 
@@ -310,7 +312,9 @@ combined diff, documentation, linked issues, and release impact.
 
 After merging into `main`, tag the main commit automatically. Releases are
 built from the tag, with both macOS architecture archives and checksums
-attached to the GitHub Release. Update the release information in
+attached to the GitHub Release. The Linux package workflow builds and publishes
+signed packages separately; see [the packaging guide](docs/linux-packaging.md).
+Update the release information in
 `swsw1005/home-tab` as the final step.
 
 ### Release verification
@@ -330,3 +334,7 @@ and run `ldr --version` from the native archive.
 
 See [local-dev-runner-initial-plan.md](local-dev-runner-initial-plan.md) for
 the full initial plan.
+
+## License
+
+LDR is licensed under the [MIT License](LICENSE).

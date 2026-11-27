@@ -46,7 +46,7 @@ Set ` + "`LDR_RUNTIME_HOME`" + ` to override the root. Runtime families use stab
 
 ## Install a missing version
 
-If the required version is not installed, use ` + "`ldr install java 21`" + `, ` + "`ldr install node 24`" + `, or ` + "`ldr install go 1.27`" + ` with the desired version. Check ` + "`ldr install --help`" + ` for LTS and release-search options. Runtime installation currently supports macOS.
+If the required version is not installed, use ` + "`ldr install java 21`" + `, ` + "`ldr install node 24`" + `, or ` + "`ldr install go 1.27`" + ` with the desired version. Check ` + "`ldr install --help`" + ` for LTS and release-search options. Runtime installation supports macOS and Linux.
 
 Full instructions: [LDR README](https://github.com/swsw1005/local-dev-launcher/blob/main/README.md#runtime-store) and [runtime store details](https://github.com/swsw1005/local-dev-launcher/blob/main/docs/runtime-store.md).
 ` + GuideEndMarker + `
